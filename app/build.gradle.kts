@@ -59,7 +59,7 @@ dependencies {
     val composeBomVersion = "2024.06.00"
 
     val activityComposeVersion = "1.8.2"
-    val geckoViewVersion = "131.0.20250107094617"
+    val geckoViewVersion = "128.0.20240709095435"
     val kotlinxSerializationVersion = "1.6.3"
     val kotlinxCoroutinesVersion = "1.8.0"
     val okhttpVersion = "4.12.0"
