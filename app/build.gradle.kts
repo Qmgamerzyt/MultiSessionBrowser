@@ -5,6 +5,7 @@ plugins {
     id("kotlin-parcelize")
     id("kotlinx-serialization")
     id("kotlin-kapt")
+    id("org.jetbrains.kotlin.plugin.compose") version "2.0.0"
     id("com.google.dagger.hilt.android") version "2.50" apply false
 }
 
@@ -27,16 +28,12 @@ android {
         dataBinding = false
     }
 
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.13"
-    }
-
     kotlinOptions {
         jvmTarget = "17"
         freeCompilerArgs += listOf("-Xopt-in=kotlin.RequiresOptIn")
     }
 
-    packagingOptions {
+    packaging {
         resources.excludes += listOf("META-INF/*")
     }
 
@@ -60,7 +57,7 @@ dependencies {
     val roomVersion = "2.6.1"
     val hiltVersion = "2.50"
     val composeBomVersion = "2024.06.00"
-    val material3Version = "1.2.1"
+
     val activityComposeVersion = "1.8.2"
     val geckoViewVersion = "128.0.20240709095435"
     val kotlinxSerializationVersion = "1.6.3"
