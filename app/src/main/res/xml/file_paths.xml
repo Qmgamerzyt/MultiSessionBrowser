@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path name="downloads" path="Downloads/" />
+    <files-path name="extensions" path="Extensions/" />
+    <files-path name="scripts" path="Scripts/" />
+    <files-path name="profiles" path="Profiles/" />
+    <cache-path name="cache" path="." />
+</paths>

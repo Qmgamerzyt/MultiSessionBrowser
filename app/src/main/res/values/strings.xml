@@ -1,0 +1,44 @@
+<resources>
+    <string name="app_name">Multi-Session Browser</string>
+    <string name="default_homepage">https://duckduckgo.com</string>
+    <string name="search_engine_url">https://duckduckgo.com/?q=%s</string>
+    <string name="permission_draw_overlays_title">Draw over other apps</string>
+    <string name="permission_draw_overlays_message">This permission is needed to show the floating ball when the toolbar is hidden.</string>
+    <string name="new_tab">New Tab</string>
+    <string name="new_incognito_tab">New Incognito Tab</string>
+    <string name="close_tab">Close Tab</string>
+    <string name="switch_session">Switch Session</string>
+    <string name="run_scripts">Run Scripts</string>
+    <string name="settings">Settings</string>
+    <string name="history">History</string>
+    <string name="bookmarks">Bookmarks</string>
+    <string name="downloads">Downloads</string>
+    <string name="extensions">Extensions</string>
+    <string name="add_session">Add Session</string>
+    <string name="delete_session">Delete Session</string>
+    <string name="rename_session">Rename Session</string>
+    <string name="session_name">Session Name</string>
+    <string name="session_color">Session Color</string>
+    <string name="session_icon">Session Icon</string>
+    <string name="cancel">Cancel</string>
+    <string name="confirm">Confirm</string>
+    <string name="delete">Delete</string>
+    <string name="save">Save</string>
+    <string name="search_or_type_url">Search or type URL</string>
+    <string name="javascript_detected">JavaScript detected</string>
+    <string name="run_in_page">Run in current page</string>
+    <string name="search_instead">Search for \"%s\"</string>
+    <string name="extension_installed">Extension installed</string>
+    <string name="extension_removed">Extension removed</string>
+    <string name="install_from_amo">Install from AMO</string>
+    <string name="install_from_file">Install .xpi file</string>
+    <string name="install_from_url">Install from URL</string>
+    <string name="manual_mode_description">MANUAL: Extension/script will not run automatically. Trigger it manually from the floating ball or toolbar.</string>
+    <string name="auto_mode_description">AUTO: Extension runs automatically on page load.</string>
+    <string name="off_mode_description">OFF: Extension is disabled for this session.</string>
+    <string name="script_saved">Script saved</string>
+    <string name="script_deleted">Script deleted</string>
+    <string name="run_script">Run Script</string>
+    <string name="script_name">Script Name</string>
+    <string name="script_code">JavaScript Code</string>
+</resources>

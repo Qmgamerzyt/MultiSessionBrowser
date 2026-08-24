@@ -1,0 +1,20 @@
+{
+  "manifest_version": 2,
+  "name": "Multi-Session AdBlock",
+  "version": "1.0",
+  "description": "Built-in ad and tracker blocker",
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "permissions": [
+    "webRequest",
+    "webRequestBlocking",
+    "<all_urls>"
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "adblock@multisessionbrowser.internal",
+      "strict_min_version": "128.0"
+    }
+  }
+}

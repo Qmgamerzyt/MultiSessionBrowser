@@ -1,0 +1,30 @@
+{
+  "manifest_version": 2,
+  "name": "Multi-Session Runner",
+  "version": "1.0",
+  "description": "Internal helper for executing JS and manual scripts",
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "permissions": [
+    "geckoViewAddons",
+    "nativeMessaging",
+    "nativeMessagingFromContent",
+    "activeTab",
+    "scripting",
+    "<all_urls>"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["runner-content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "runner@multisessionbrowser.internal",
+      "strict_min_version": "128.0"
+    }
+  }
+}

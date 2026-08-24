@@ -1,0 +1,46 @@
+# Gradle
+.gradle/
+build/
+/*/build/
+/*/build.gradle
+/gradle.properties
+/local.properties
+*.iml
+.idea/
+*.class
+*.log
+
+# Android
+*.apk
+*.ap_
+*.dex
+*.class
+*.apk
+*.aar
+*.apk
+*.ap_
+
+# Generated files
+*.generated.*
+*generated*/
+*.pyc
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Hilt
+*.hilt/
+
+# Room
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# GeckoView
+*.so
+
+# Kotlin
+*.kt.bin
+*.klib
