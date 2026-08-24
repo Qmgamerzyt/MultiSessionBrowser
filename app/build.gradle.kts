@@ -3,7 +3,6 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("kotlin-android")
     id("kotlin-parcelize")
-    id("androidx.navigation.safeargs.kotlin")
     id("kotlinx-serialization")
     id("kotlin-kapt")
     id("com.google.dagger.hilt.android") version "2.50" apply false
@@ -78,7 +77,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:$activityComposeVersion")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:$lifecycleVersion")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:$lifecycleVersion")
-    implementation("androidx.navigation:navigation-compose:2.7.7")
+    
 
     // Core
     implementation("androidx.core:core-ktx:$coreKtxVersion")
