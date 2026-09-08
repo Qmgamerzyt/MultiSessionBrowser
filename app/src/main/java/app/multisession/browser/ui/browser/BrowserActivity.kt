@@ -271,7 +271,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         }
         findViewById<View>(R.id.errorExternal).setOnClickListener { currentTab?.error?.url?.let { openExternal(it) } }
 
-        suggestionPopup = SuggestionPopup(this, core.repo, core.lifecycleScope) { item ->
+        suggestionPopup = SuggestionPopup(this, core.repo, lifecycleScope) { item ->
             navigate(item.url)
         }
         suggestionPopup.anchor(findViewById(R.id.urlBox))
