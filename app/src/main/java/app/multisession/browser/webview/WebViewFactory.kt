@@ -68,6 +68,7 @@ object WebViewFactory {
 
         applyUserAgent(webView, tab.desktopMode || session.desktopMode)
         applyDesktopScale(webView, tab.desktopMode || session.desktopMode)
+        if (tab.desktopMode || session.desktopMode) applyDesktopViewport(webView, true)
 
         // Dark mode: let the WebView darken pages that don't provide a dark theme (when app is in dark mode).
         try {
@@ -103,7 +104,7 @@ object WebViewFactory {
 
     fun applyDesktopViewport(webView: WebView, desktop: Boolean) {
         if (!desktop) return
-        val js = """(function(){var v=document.querySelector('meta[name="viewport"]');if(v){v.setAttribute('content','width=1024');}})();"""
+        val js = """(function(){var f=function(){var v=document.querySelector('meta[name="viewport"]');if(v&&v.content!=='width=980'){v.setAttribute('content','width=980');}};f();new MutationObserver(f).observe(document.head||document.documentElement,{childList:true,attributes:true,attributeFilter:['content']});})();"""
         webView.evaluateJavascript(js, null)
     }
 

@@ -40,6 +40,11 @@ class BrowserWebViewClient(private val core: BrowserCore, private val tab: Tab) 
             WebViewFactory.applyDesktopViewport(view, true)
     }
 
+    override fun onLoadResource(view: WebView, url: String) {
+        if (tab.desktopMode || core.sessions.get(tab.sessionId)?.desktopMode == true)
+            WebViewFactory.applyDesktopViewport(view, true)
+    }
+
     override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
         // Also fires for pushState/replaceState navigations in SPAs.
         tab.url = url
