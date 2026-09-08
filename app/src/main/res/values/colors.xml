@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="brand_primary">#2962FF</color>
+    <color name="brand_on_primary">#FFFFFF</color>
+    <color name="brand_primary_container">#DCE1FF</color>
+    <color name="brand_on_primary_container">#001550</color>
+    <color name="brand_primary_dark">#B4C5FF</color>
+    <color name="brand_on_primary_dark">#00287E</color>
+    <color name="brand_primary_container_dark">#0040B0</color>
+    <color name="brand_on_primary_container_dark">#DCE1FF</color>
+    <color name="banner_bg">#FFF3CD</color>
+    <color name="banner_text">#4A3B00</color>
+    <color name="live_badge">#00C853</color>
+</resources>

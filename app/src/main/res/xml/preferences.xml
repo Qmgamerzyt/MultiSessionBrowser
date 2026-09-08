@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory android:title="@string/pref_general">
+        <ListPreference
+            android:key="search_engine"
+            android:title="@string/pref_search_engine"
+            android:entries="@array/search_engine_names"
+            android:entryValues="@array/search_engine_values"
+            android:defaultValue="duckduckgo"
+            app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            android:key="custom_search_url"
+            android:title="@string/pref_custom_search"
+            android:summary="@string/pref_custom_search_summary" />
+        <EditTextPreference
+            android:key="homepage"
+            android:title="@string/pref_homepage"
+            android:summary="@string/pref_homepage_summary" />
+        <SwitchPreferenceCompat
+            android:key="open_external_apps"
+            android:title="@string/pref_open_external_apps"
+            android:summary="@string/pref_open_external_apps_summary"
+            android:defaultValue="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/pref_webview">
+        <SwitchPreferenceCompat
+            android:key="javascript_enabled"
+            android:title="@string/pref_javascript"
+            android:defaultValue="true" />
+        <SwitchPreferenceCompat
+            android:key="zoom_enabled"
+            android:title="@string/pref_zoom"
+            android:defaultValue="true" />
+        <SwitchPreferenceCompat
+            android:key="media_autoplay"
+            android:title="@string/pref_autoplay"
+            android:defaultValue="false" />
+        <SwitchPreferenceCompat
+            android:key="third_party_cookies"
+            android:title="@string/pref_third_party_cookies"
+            android:summary="@string/pref_third_party_cookies_summary"
+            android:defaultValue="true" />
+        <SwitchPreferenceCompat
+            android:key="safe_browsing"
+            android:title="@string/pref_safe_browsing"
+            android:defaultValue="true" />
+        <ListPreference
+            android:key="user_agent_mode"
+            android:title="@string/pref_user_agent"
+            android:entries="@array/ua_names"
+            android:entryValues="@array/ua_values"
+            android:defaultValue="default"
+            app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            android:key="custom_user_agent"
+            android:title="@string/pref_custom_ua"
+            android:summary="@string/pref_custom_ua_summary" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/pref_sessions">
+        <ListPreference
+            android:key="live_tab_limit"
+            android:title="@string/pref_live_tabs"
+            android:summary="@string/pref_live_tabs_summary"
+            android:entries="@array/live_tab_names"
+            android:entryValues="@array/live_tab_values"
+            android:defaultValue="6" />
+        <Preference android:key="clear_session_cookies" android:title="@string/clear_cookies" android:summary="@string/pref_current_session_only" />
+        <Preference android:key="clear_session_storage" android:title="@string/clear_storage" android:summary="@string/pref_current_session_only" />
+        <Preference android:key="clear_session_cache" android:title="@string/clear_cache" android:summary="@string/pref_current_session_only" />
+        <Preference android:key="clear_session_history" android:title="@string/clear_history" android:summary="@string/pref_current_session_only" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/pref_downloads">
+        <SwitchPreferenceCompat
+            android:key="ask_before_download"
+            android:title="@string/pref_ask_download"
+            android:defaultValue="true" />
+        <Preference
+            android:title="@string/pref_download_location"
+            android:summary="@string/pref_download_location_summary"
+            android:selectable="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/pref_privacy">
+        <Preference android:key="clear_all_history" android:title="@string/clear_all_history" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/pref_appearance">
+        <ListPreference
+            android:key="theme"
+            android:title="@string/pref_theme"
+            android:entries="@array/theme_names"
+            android:entryValues="@array/theme_values"
+            android:defaultValue="system"
+            app:useSimpleSummaryProvider="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/pref_about">
+        <Preference android:key="about_webview" android:title="@string/pref_isolation_status" android:selectable="false" />
+    </PreferenceCategory>
+</PreferenceScreen>

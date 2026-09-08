@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item android:id="@+id/action_import_zip" android:title="@string/import_zip" app:showAsAction="never" />
+    <item android:id="@+id/action_import_html" android:title="@string/import_html" app:showAsAction="never" />
+    <item android:id="@+id/action_new_html" android:title="@string/new_html_page" app:showAsAction="never" />
+    <item android:id="@+id/action_apk_help" android:title="@string/apk_help_title" app:showAsAction="never" />
+</menu>
