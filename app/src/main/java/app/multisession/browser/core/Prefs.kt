@@ -36,7 +36,7 @@ object Prefs {
     }
 
     fun searchUrlFor(query: String): String {
-        val template = when (sp.getString(KEY_SEARCH_ENGINE, "duckduckgo")) {
+        val template = when (sp.getString(KEY_SEARCH_ENGINE, "google")) {
             "google" -> "https://www.google.com/search?q=%s"
             "bing" -> "https://www.bing.com/search?q=%s"
             "custom" -> sp.getString(KEY_CUSTOM_SEARCH, null)?.takeIf { it.contains("%s") } ?: DDG

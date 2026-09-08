@@ -183,8 +183,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
     override fun onResume() {
         super.onResume()
         if (!uiReady) return
-        urlInput.clearFocus()
-        hideKeyboard()
     }
 
     override fun onStop() {
@@ -238,7 +236,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         }
         urlInput.setOnFocusChangeListener { _, hasFocus ->
             if (hasFocus) {
-                currentTab?.let { if (!it.isStartPage) urlInput.setText(it.url) }
                 urlInput.post { urlInput.selectAll() }
             } else {
                 currentTab?.let { updateToolbar(it) }

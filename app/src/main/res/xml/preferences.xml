@@ -8,7 +8,7 @@
             android:title="@string/pref_search_engine"
             android:entries="@array/search_engine_names"
             android:entryValues="@array/search_engine_values"
-            android:defaultValue="duckduckgo"
+            android:defaultValue="google"
             app:useSimpleSummaryProvider="true" />
         <EditTextPreference
             android:key="custom_search_url"
