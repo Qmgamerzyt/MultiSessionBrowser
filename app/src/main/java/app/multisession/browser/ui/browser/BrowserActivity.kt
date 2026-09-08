@@ -38,6 +38,7 @@ import android.widget.ImageView
 import android.widget.PopupMenu
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -136,7 +137,9 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_browser)
         bindViews()
-        onBackPressedDispatcher.addCallback(this) { handleBack() }
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() { handleBack() }
+        })
 
         lifecycleScope.launch {
             core.awaitReady()
@@ -747,7 +750,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
             SslError.SSL_EXPIRED -> R.string.ssl_expired
             SslError.SSL_IDMISMATCH -> R.string.ssl_mismatch
             SslError.SSL_UNTRUSTED -> R.string.ssl_untrusted
-            SslError.SSL_DATEINVALID -> R.string.ssl_date
             SslError.SSL_NOTYETVALID -> R.string.ssl_notyet
             else -> R.string.ssl_generic
         }
