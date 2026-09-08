@@ -69,6 +69,9 @@ interface HistoryDao {
     @Query("DELETE FROM history WHERE sessionId = :sessionId")
     suspend fun clear(sessionId: String)
 
+    @Query("SELECT * FROM history WHERE sessionId = :sessionId AND (url LIKE '%' || :query || '%' OR title LIKE '%' || :query || '%') ORDER BY visitedAt DESC LIMIT :limit")
+    suspend fun search(sessionId: String, query: String, limit: Int): List<HistoryEntity>
+
     @Query("DELETE FROM history")
     suspend fun clearAll()
 }
@@ -86,6 +89,9 @@ interface BookmarkDao {
 
     @Query("SELECT EXISTS(SELECT 1 FROM bookmarks WHERE url = :url AND (sessionId IS NULL OR sessionId = :sessionId))")
     suspend fun exists(sessionId: String, url: String): Boolean
+
+    @Query("SELECT * FROM bookmarks WHERE (sessionId IS NULL OR sessionId = :sessionId) AND (url LIKE '%' || :query || '%' OR title LIKE '%' || :query || '%') ORDER BY createdAt DESC LIMIT :limit")
+    suspend fun search(sessionId: String, query: String, limit: Int): List<BookmarkEntity>
 
     @Query("DELETE FROM bookmarks WHERE url = :url AND (sessionId IS NULL OR sessionId = :sessionId)")
     suspend fun deleteByUrl(sessionId: String, url: String)

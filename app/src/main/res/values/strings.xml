@@ -113,6 +113,7 @@
     <string name="perm_request_msg">This site wants to use your %1$s.</string>
     <string name="perm_storage_denied">Storage permission is required to save downloads on Android 9</string>
     <string name="pref_about">About</string>
+    <string name="copyright">Copyright QM Gamerzメyt</string>
     <string name="pref_appearance">Appearance</string>
     <string name="pref_ask_download">Ask before downloading</string>
     <string name="pref_autoplay">Media autoplay</string>
@@ -185,6 +186,8 @@
     <string name="tabs">Tabs</string>
     <string name="unknown_size">unknown size</string>
     <string name="url_hint">Search or enter URL</string>
+    <string name="suggestion_search">Search for: %1$s</string>
+    <string name="suggestion_go_to">Go to: %1$s</string>
     <string name="username">Username</string>
     <string name="welcome">Welcome</string>
     <plurals name="tabs_count">

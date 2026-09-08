@@ -101,5 +101,6 @@
 
     <PreferenceCategory android:title="@string/pref_about">
         <Preference android:key="about_webview" android:title="@string/pref_isolation_status" android:selectable="false" />
+        <Preference android:key="copyright" android:title="@string/copyright" android:selectable="false" />
     </PreferenceCategory>
 </PreferenceScreen>

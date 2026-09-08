@@ -107,6 +107,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
 
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
+    private lateinit var suggestionPopup: SuggestionPopup
 
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var cameraOutputUri: Uri? = null
@@ -179,6 +180,13 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         showActiveSessionTab()
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (!uiReady) return
+        urlInput.clearFocus()
+        hideKeyboard()
+    }
+
     override fun onStop() {
         super.onStop()
         if (!uiReady) return
@@ -234,8 +242,18 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
                 urlInput.post { urlInput.selectAll() }
             } else {
                 currentTab?.let { updateToolbar(it) }
+                suggestionPopup.dismiss()
             }
         }
+        urlInput.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                val input = s?.toString() ?: return
+                val session = core.sessions.get(currentTab?.sessionId ?: return) ?: return
+                suggestionPopup.showSuggestions(input, session.id)
+            }
+        })
         reloadStopButton.setOnClickListener {
             val tab = currentTab ?: return@setOnClickListener
             if (tab.isLoading) tab.webView?.stopLoading() else reload(tab)
@@ -252,6 +270,11 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
             if (tab.webView?.canGoBack() == true) { tab.error = null; tab.webView?.goBack() } else loadInTab(tab, UrlUtils.START_PAGE)
         }
         findViewById<View>(R.id.errorExternal).setOnClickListener { currentTab?.error?.url?.let { openExternal(it) } }
+
+        suggestionPopup = SuggestionPopup(this, core.repo, core.lifecycleScope) { item ->
+            navigate(item.url)
+        }
+        suggestionPopup.anchor(findViewById(R.id.urlBox))
     }
 
     // ================================================================== session / tab display
@@ -328,6 +351,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
 
     private fun navigate(input: String) {
         val tab = currentTab ?: return
+        suggestionPopup.dismiss()
         hideKeyboard()
         urlInput.clearFocus()
         loadInTab(tab, UrlUtils.resolveInput(input))

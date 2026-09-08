@@ -31,7 +31,7 @@ object UrlUtils {
         if (input.isEmpty()) return START_PAGE
         val lower = input.lowercase()
         if (lower == START_PAGE || lower == "about:blank") return START_PAGE
-        if (lower.startsWith("javascript:") || lower.startsWith("file:")) {
+        if (lower.startsWith("file:")) {
             return Prefs.searchUrlFor(input)
         }
         val passThrough = listOf("http://", "https://", "content://", "data:", "about:", "intent:")
@@ -40,7 +40,7 @@ object UrlUtils {
         return Prefs.searchUrlFor(input)
     }
 
-    private fun looksLikeHost(s: String): Boolean {
+    fun looksLikeHost(s: String): Boolean {
         if (s.any { it.isWhitespace() }) return false
         val hostPort = s.substringBefore('/').substringBefore('?').substringBefore('#')
         val host = hostPort.substringBefore(':')

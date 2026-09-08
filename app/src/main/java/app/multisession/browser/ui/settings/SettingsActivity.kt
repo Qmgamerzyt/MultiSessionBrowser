@@ -43,6 +43,7 @@ class SettingsFragment : PreferenceFragmentCompat(), SharedPreferences.OnSharedP
         findPreference<EditTextPreference>(Prefs.KEY_CUSTOM_SEARCH)?.setOnBindEditTextListener { it.hint = "https://example.com/search?q=%s" }
 
         findPreference<Preference>("about_webview")?.summary = core.isolation.describe(requireContext())
+        findPreference<Preference>("copyright")?.summary = getString(R.string.copyright)
 
         findPreference<Preference>("clear_session_cookies")?.setOnPreferenceClickListener { confirm(R.string.clear_cookies) { s -> core.sessions.clearData(s, cookies = true, storage = false, cache = false, history = false) }; true }
         findPreference<Preference>("clear_session_storage")?.setOnPreferenceClickListener { confirm(R.string.clear_storage) { s -> core.sessions.clearData(s, cookies = false, storage = true, cache = false, history = false) }; true }
