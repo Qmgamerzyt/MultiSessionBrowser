@@ -26,7 +26,7 @@ class SuggestionPopup(
     init {
         popup.anchorView = null // set later via anchor()
         popup.setAdapter(adapter)
-        popup.isModal = true
+        popup.isModal = false
         popup.width = ListPopupWindow.MATCH_PARENT
         popup.setOnItemClickListener { _, _, position, _ ->
             val item = adapter.getItem(position)
