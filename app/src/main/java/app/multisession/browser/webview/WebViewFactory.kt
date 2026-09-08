@@ -101,6 +101,12 @@ object WebViewFactory {
         webView.setInitialScale(if (desktop) 50 else 100)
     }
 
+    fun applyDesktopViewport(webView: WebView, desktop: Boolean) {
+        if (!desktop) return
+        val js = """(function(){var v=document.querySelector('meta[name="viewport"]');if(v){v.setAttribute('content','width=1024');}})();"""
+        webView.evaluateJavascript(js, null)
+    }
+
     private fun desktopUserAgent(mobileUa: String): String =
         mobileUa.replace(Regex("\\(Linux;.*?\\)"), "(X11; Linux x86_64)")
             .replace(" Mobile Safari", " Safari")

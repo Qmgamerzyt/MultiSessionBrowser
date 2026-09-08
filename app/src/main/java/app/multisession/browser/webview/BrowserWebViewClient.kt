@@ -36,6 +36,8 @@ class BrowserWebViewClient(private val core: BrowserCore, private val tab: Tab) 
         tab.favicon = favicon
         tab.url = url
         core.tabs.notifyTabUpdated(tab)
+        if (tab.desktopMode || core.sessions.get(tab.sessionId)?.desktopMode == true)
+            WebViewFactory.applyDesktopViewport(view, true)
     }
 
     override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
