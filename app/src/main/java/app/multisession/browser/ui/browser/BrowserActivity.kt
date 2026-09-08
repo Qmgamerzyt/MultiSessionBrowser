@@ -521,7 +521,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
 
     private fun toggleDesktop(tab: Tab) {
         tab.desktopMode = !tab.desktopMode
-        tab.webView?.let { WebViewFactory.applyUserAgent(it, tab.desktopMode); it.reload() }
+        tab.webView?.let { WebViewFactory.applyUserAgent(it, tab.desktopMode); WebViewFactory.applyDesktopScale(it, tab.desktopMode); it.reload() }
         core.tabs.persistTab(tab)
         snack(getString(if (tab.desktopMode) R.string.desktop_on else R.string.desktop_off))
     }

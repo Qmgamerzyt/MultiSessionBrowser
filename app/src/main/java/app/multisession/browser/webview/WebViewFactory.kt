@@ -67,6 +67,7 @@ object WebViewFactory {
         s.loadsImagesAutomatically = true
 
         applyUserAgent(webView, tab.desktopMode || session.desktopMode)
+        applyDesktopScale(webView, tab.desktopMode || session.desktopMode)
 
         // Dark mode: let the WebView darken pages that don't provide a dark theme (when app is in dark mode).
         try {
@@ -94,6 +95,10 @@ object WebViewFactory {
             Prefs.uaMode == "mobile" -> defaultUa.replace("; wv", "")
             else -> defaultUa
         }
+    }
+
+    fun applyDesktopScale(webView: WebView, desktop: Boolean) {
+        webView.setInitialScale(if (desktop) 50 else 100)
     }
 
     private fun desktopUserAgent(mobileUa: String): String =
