@@ -12,8 +12,8 @@ android {
         applicationId = "app.multisession.browser"
         minSdk = 28          // Android 9 (Pie)
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.1.1"
         vectorDrawables.useSupportLibrary = true
     }
 
