@@ -13,10 +13,16 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * Chrome-like address-bar suggestions. Visibility is *derived* from [isSearchActive]
+ * (address bar focused): the popup is only ever shown while that predicate is true and is
+ * re-checked after the asynchronous lookup, so a stale result can never re-open it.
+ */
 class SuggestionPopup(
     private val context: Context,
     private val repo: BrowserRepository,
     private val scope: CoroutineScope,
+    private val isSearchActive: () -> Boolean,
     private val onItemClick: (SuggestionItem) -> Unit
 ) {
     private val adapter = SuggestionAdapter(context)
@@ -26,7 +32,8 @@ class SuggestionPopup(
     init {
         popup.anchorView = null // set later via anchor()
         popup.setAdapter(adapter)
-        popup.isModal = false
+        popup.isModal = false // keeps the keyboard/focus on the EditText while typing
+        popup.inputMethodMode = ListPopupWindow.INPUT_METHOD_NEEDED // never overlap the keyboard
         popup.width = ListPopupWindow.MATCH_PARENT
         popup.setOnItemClickListener { _, _, position, _ ->
             val item = adapter.getItem(position)
@@ -41,28 +48,35 @@ class SuggestionPopup(
 
     fun showSuggestions(input: String, sessionId: String) {
         searchJob?.cancel()
-        if (input.isBlank()) {
-            adapter.clear()
-            popup.dismiss()
+        searchJob = null
+        if (input.isBlank() || !isSearchActive()) {
+            dismiss()
             return
         }
         searchJob = scope.launch {
             val suggestions = generateSuggestions(input, sessionId)
             withContext(Dispatchers.Main) {
-                if (suggestions.isNotEmpty()) {
-                    adapter.update(suggestions)
-                    if (!popup.isShowing) {
+                // State may have changed while the lookup ran (navigation, focus loss, tab switch).
+                if (suggestions.isEmpty() || !isSearchActive() || popup.anchorView?.isAttachedToWindow != true) {
+                    dismiss()
+                    return@withContext
+                }
+                adapter.update(suggestions)
+                if (!popup.isShowing) {
+                    try {
                         popup.show()
+                    } catch (t: Throwable) {
+                        // e.g. window token gone during teardown: silently stay hidden
+                        adapter.clear()
                     }
-                } else {
-                    adapter.clear()
-                    popup.dismiss()
                 }
             }
         }
     }
 
     fun dismiss() {
+        searchJob?.cancel()
+        searchJob = null
         if (popup.isShowing) popup.dismiss()
         adapter.clear()
     }

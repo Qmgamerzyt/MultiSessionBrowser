@@ -1,6 +1,7 @@
 package app.multisession.browser.ui.browser
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.DownloadManager
 import android.content.ActivityNotFoundException
 import android.content.ClipData
@@ -19,6 +20,7 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.text.format.Formatter
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
@@ -90,6 +92,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
     private lateinit var sessionChip: View
     private lateinit var sessionDot: View
     private lateinit var sessionName: TextView
+    private lateinit var focusHolder: View
     private lateinit var urlInput: EditText
     private lateinit var securityIcon: ImageView
     private lateinit var reloadStopButton: ImageButton
@@ -176,8 +179,25 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         if (!uiReady) return
         core.tabs.host = this
         core.tabs.reapplySettings()
-        currentTab?.webView?.resumeTimers()
-        showActiveSessionTab()
+        val session = core.sessions.active.value
+        val tab = currentTab
+        if (session != null && tab != null && tab.sessionId == session.id && isDisplayed(tab)) {
+            // Same tab is still on screen: only resume it. Rebuilding the hierarchy here used to
+            // detach the focused WebView, which made the framework move focus to the URL bar and
+            // open the keyboard for it (OTP paste ended up in the address bar).
+            tab.webView?.onResume()
+            tab.webView?.resumeTimers()
+            updateToolbar(tab)
+        } else {
+            showActiveSessionTab()
+        }
+    }
+
+    /** True when [tab]'s content view (WebView or native start page) is the one currently attached. */
+    private fun isDisplayed(tab: Tab): Boolean {
+        val wv = tab.webView
+        return if (wv != null) wv.parent === webContainer
+        else tab.isStartPage && startPage?.view?.parent === webContainer
     }
 
     override fun onResume() {
@@ -203,6 +223,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
             core.tabs.detachFromActivity()
         }
         activePermissionDialog?.second?.dismiss()
+        if (::suggestionPopup.isInitialized) suggestionPopup.dismiss()
         super.onDestroy()
     }
 
@@ -215,6 +236,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         sessionChip = findViewById(R.id.sessionChip)
         sessionDot = findViewById(R.id.sessionDot)
         sessionName = findViewById(R.id.sessionName)
+        focusHolder = findViewById(R.id.focusHolder)
         urlInput = findViewById(R.id.urlInput)
         securityIcon = findViewById(R.id.securityIcon)
         reloadStopButton = findViewById(R.id.reloadStopButton)
@@ -236,16 +258,20 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         }
         urlInput.setOnFocusChangeListener { _, hasFocus ->
             if (hasFocus) {
-                urlInput.post { urlInput.selectAll() }
+                urlInput.post { if (urlInput.hasFocus()) urlInput.selectAll() }
             } else {
-                currentTab?.let { updateToolbar(it) }
+                // Search mode ended: suggestions are only valid while the bar is focused.
                 suggestionPopup.dismiss()
+                currentTab?.let { updateToolbar(it) }
             }
         }
         urlInput.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: android.text.Editable?) {
+                // Only user typing (bar focused) may open suggestions. Programmatic setText() from
+                // updateToolbar() must never do so.
+                if (!isSearchActive()) { suggestionPopup.dismiss(); return }
                 val input = s?.toString() ?: return
                 val session = core.sessions.get(currentTab?.sessionId ?: return) ?: return
                 suggestionPopup.showSuggestions(input, session.id)
@@ -268,10 +294,38 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         }
         findViewById<View>(R.id.errorExternal).setOnClickListener { currentTab?.error?.url?.let { openExternal(it) } }
 
-        suggestionPopup = SuggestionPopup(this, core.repo, lifecycleScope) { item ->
+        suggestionPopup = SuggestionPopup(this, core.repo, lifecycleScope, ::isSearchActive) { item ->
             navigate(item.url)
         }
         suggestionPopup.anchor(findViewById(R.id.urlBox))
+    }
+
+    // ================================================================== search / focus state
+
+    /** The single source of truth for "search mode": the address bar has input focus in a started Activity. */
+    private fun isSearchActive(): Boolean =
+        ::urlInput.isInitialized && urlInput.hasFocus() && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+
+    /**
+     * Leaves search mode explicitly: hides suggestions and the keyboard and parks focus on the
+     * invisible holder so the framework cannot hand it back to the EditText.
+     */
+    private fun exitSearchMode() {
+        suggestionPopup.dismiss()
+        if (urlInput.hasFocus()) {
+            hideKeyboard()
+            focusHolder.requestFocus()
+        }
+        currentTab?.let { updateToolbar(it) }
+    }
+
+    /** Touching the page always ends search mode and gives focus to the page (dismisses suggestions). */
+    private val webTouchListener = View.OnTouchListener { v, ev ->
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            if (urlInput.hasFocus()) exitSearchMode()
+            if (!v.hasFocus()) v.requestFocus()
+        }
+        false // never consume: the WebView handles the event normally
     }
 
     // ================================================================== session / tab display
@@ -284,6 +338,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
 
     private fun homeUrl(): String = core.localContent.bundledAppUrl() ?: Prefs.homepage
 
+    @SuppressLint("ClickableViewAccessibility")
     fun showTab(tab: Tab) {
         val previous = currentTab
         if (previous != null && previous.id != tab.id) {
@@ -292,15 +347,26 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         }
         currentTabId = tab.id
         core.tabs.selectTab(tab)
-        urlInput.clearFocus()
+        exitSearchMode()
 
-        webContainer.removeAllViews()
         if (tab.isStartPage && tab.webView == null) {
+            webContainer.removeAllViews()
             showStartPage(tab)
         } else {
             val wv = core.tabs.ensureWebView(tab, this)
-            (wv.parent as? ViewGroup)?.removeView(wv)
-            webContainer.addView(wv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            wv.setOnTouchListener(webTouchListener)
+            if (wv.parent !== webContainer) {
+                webContainer.removeAllViews()
+                (wv.parent as? ViewGroup)?.removeView(wv)
+                webContainer.addView(wv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            } else {
+                // Already attached (e.g. re-shown after resume): keep it in place so it does not lose
+                // focus; just drop any other child such as the start page.
+                for (i in webContainer.childCount - 1 downTo 0) {
+                    val child = webContainer.getChildAt(i)
+                    if (child !== wv) webContainer.removeViewAt(i)
+                }
+            }
             wv.onResume()
             wv.resumeTimers()
         }
@@ -348,9 +414,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
 
     private fun navigate(input: String) {
         val tab = currentTab ?: return
-        suggestionPopup.dismiss()
-        hideKeyboard()
-        urlInput.clearFocus()
+        exitSearchMode()
         loadInTab(tab, UrlUtils.resolveInput(input))
     }
 
@@ -375,9 +439,13 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         if (newTab || tab == null) newTab(url) else loadInTab(tab, url)
     }
 
+    /** Only called from explicit user actions (start-page search box, "new tab" button). */
     override fun focusUrlBar() {
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
         urlInput.requestFocus()
-        urlInput.post { getSystemService(InputMethodManager::class.java).showSoftInput(urlInput, InputMethodManager.SHOW_IMPLICIT) }
+        urlInput.post {
+            if (urlInput.hasFocus()) getSystemService(InputMethodManager::class.java).showSoftInput(urlInput, InputMethodManager.SHOW_IMPLICIT)
+        }
     }
 
     override fun openSessions() = SessionsSheet().show(supportFragmentManager, "sessions")
@@ -400,7 +468,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         val tab = currentTab
         when {
             customView != null -> onHideCustomView()
-            urlInput.hasFocus() -> { urlInput.clearFocus(); hideKeyboard() }
+            urlInput.hasFocus() -> exitSearchMode()
             tab?.webView?.canGoBack() == true -> goBack()
             tab?.openerTabId != null -> closeTab(tab)
             tab != null && !tab.isStartPage && tab.webView == null -> loadInTab(tab, UrlUtils.START_PAGE)

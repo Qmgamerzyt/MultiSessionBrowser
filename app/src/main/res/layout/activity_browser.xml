@@ -12,6 +12,20 @@
         android:layout_height="match_parent"
         android:orientation="vertical">
 
+        <!--
+            Invisible default-focus holder. It must be the FIRST focusable-in-touch-mode view of the
+            hierarchy: whenever the framework re-assigns focus (first layout, clearFocus(), removal of
+            a focused WebView) it lands here instead of on the URL EditText, so the address bar never
+            receives focus / opens the keyboard unless the user explicitly taps it.
+        -->
+        <View
+            android:id="@+id/focusHolder"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:importantForAccessibility="no" />
+
         <TextView
             android:id="@+id/isolationBanner"
             android:layout_width="match_parent"
