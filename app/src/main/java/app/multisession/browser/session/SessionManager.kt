@@ -26,9 +26,9 @@ class SessionManager(private val core: BrowserCore) {
     suspend fun initialize() {
         val dao = core.repo.sessions
         // Private sessions never survive a process restart: discard them and their profile data.
+        // (Private sessions run in Gecko private mode: their site data was memory-only and is already gone.)
         dao.getAll().filter { it.isPrivate }.forEach { s ->
             core.repo.deleteSessionCascade(s.id)
-            core.isolation.deleteProfileData(s)
             AppLog.i(TAG, "Discarded private session ${s.id.take(8)}")
         }
         var all = dao.getAll()
@@ -126,7 +126,7 @@ class SessionManager(private val core: BrowserCore) {
 
     suspend fun clearData(id: String, cookies: Boolean, storage: Boolean, cache: Boolean, history: Boolean) {
         val s = get(id) ?: return
-        // Release the session's WebViews so the clears apply cleanly; tabs are restored lazily from state.
+        // Close the session's GeckoSessions so the clears apply cleanly; tabs are restored lazily from state.
         core.tabs.hibernateSession(id)
         if (cookies) core.isolation.clearCookies(s)
         if (storage) core.isolation.clearSiteData(s)

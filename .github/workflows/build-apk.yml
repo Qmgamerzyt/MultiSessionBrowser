@@ -18,9 +18,10 @@ env:
 
 jobs:
   build:
-    name: Build debug + release APK
+    name: Build debug + release APK (GeckoView, arm64-v8a + armeabi-v7a)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # First uncached run downloads the 230 MB GeckoView AAR and merges ~600 MB of native libs.
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -36,17 +37,19 @@ jobs:
         uses: android-actions/setup-android@v4
 
       - name: Install SDK platform + build-tools
-        run: sdkmanager "platforms;android-35" "build-tools;34.0.0" "build-tools;35.0.0" "platform-tools"
+        # compileSdk 37 (required by GeckoView 155's androidx.core 1.19); build-tools 36.0.0 is AGP 9.2's default.
+        run: sdkmanager "platforms;android-37" "build-tools;36.0.0" "platform-tools"
 
-      - name: Set up Gradle 8.9
+      - name: Set up Gradle 9.4.1
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: '8.9'
+          gradle-version: '9.4.1'
+          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
 
-      - name: Build debug APK
+      - name: Build debug APKs
         run: gradle assembleDebug --no-daemon --stacktrace
 
-      - name: Upload debug APK
+      - name: Upload debug APKs
         uses: actions/upload-artifact@v6
         with:
           name: MultiSessionBrowser-debug
@@ -59,14 +62,14 @@ jobs:
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
           echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
 
-      - name: Build release APK
+      - name: Build release APKs
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: gradle assembleRelease --no-daemon --stacktrace
 
-      - name: Upload release APK
+      - name: Upload release APKs
         uses: actions/upload-artifact@v6
         with:
           name: MultiSessionBrowser-release

@@ -10,7 +10,7 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <!-- Android 9 only: DownloadManager needs this to write into the public Downloads folder. -->
+    <!-- Android 9 only: needed to write downloads into the public Downloads folder. -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
@@ -35,8 +35,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MultiSessionBrowser"
         android:usesCleartextTraffic="true"
-        tools:targetApi="35">
+        tools:targetApi="37">
 
+        <!-- GeckoView's content/GPU/socket child-process services are merged in from the GeckoView AAR manifest. -->
         <activity
             android:name=".ui.browser.BrowserActivity"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"

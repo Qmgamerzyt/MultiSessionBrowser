@@ -88,10 +88,10 @@
     <string name="import_html">Import HTML file</string>
     <string name="import_project">Import project</string>
     <string name="import_zip">Import project (ZIP)</string>
-    <string name="isolation_banner">⚠ Sessions are NOT isolated on this device – update Android System WebView. Tap for details.</string>
-    <string name="isolation_ok">Sessions are isolated with separate WebView profiles (own cookies, storage, cache, service workers). WebView: %1$s</string>
+    <string name="isolation_banner">⚠ Session isolation is not available. Tap for details.</string>
+    <string name="isolation_ok">Sessions are isolated by the Firefox engine (GeckoView session contexts): each session has its own cookies, logins, local storage, IndexedDB, service workers and site permissions. Engine: %1$s</string>
     <string name="isolation_title">Session isolation</string>
-    <string name="isolation_unavailable">Isolation unavailable: this device’s Android System WebView (%1$s) does not support multiple profiles. All sessions currently share ONE cookie/storage jar. Update “Android System WebView” from Google Play to enable real isolation.</string>
+    <string name="isolation_unavailable">Session isolation status: %1$s</string>
     <string name="local_projects">Local HTML projects</string>
     <string name="manage">Manage</string>
     <string name="menu">Menu</string>
@@ -116,7 +116,7 @@
     <string name="copyright">Copyright QM Gamerzメyt</string>
     <string name="pref_appearance">Appearance</string>
     <string name="pref_ask_download">Ask before downloading</string>
-    <string name="pref_autoplay">Media autoplay</string>
+    <string name="pref_autoplay">Allow audible media autoplay (otherwise audio starts after you interact with the page)</string>
     <string name="pref_current_session_only">Current session only</string>
     <string name="pref_custom_search">Custom search URL</string>
     <string name="pref_custom_search_summary">Use %s where the query goes</string>
@@ -128,7 +128,7 @@
     <string name="pref_general">General</string>
     <string name="pref_homepage">Homepage</string>
     <string name="pref_homepage_summary">Leave empty for the start page</string>
-    <string name="pref_isolation_status">Session isolation status</string>
+    <string name="pref_isolation_status">Engine &amp; session isolation</string>
     <string name="pref_javascript">JavaScript</string>
     <string name="pref_live_tabs">Tabs kept alive</string>
     <string name="pref_live_tabs_summary">Other tabs are frozen and restored when you return to them</string>
@@ -140,10 +140,10 @@
     <string name="pref_sessions">Sessions &amp; memory</string>
     <string name="pref_theme">Theme</string>
     <string name="pref_third_party_cookies">Third-party cookies</string>
-    <string name="pref_third_party_cookies_summary">Some sign-in flows need this. Cookies always stay inside the session.</string>
+    <string name="pref_third_party_cookies_summary">Off = only first-party cookies are accepted (may break some sign-in flows)</string>
     <string name="pref_user_agent">User agent</string>
-    <string name="pref_webview">WebView</string>
-    <string name="pref_zoom">Allow pinch zoom</string>
+    <string name="pref_webview">Web engine (Firefox / GeckoView)</string>
+    <string name="pref_zoom">Allow pinch zoom on every page (ignores user-scalable=no)</string>
     <string name="private_label">Private</string>
     <string name="private_session">Private session</string>
     <string name="private_session_explainer">A private session keeps no history and is deleted (with its cookies and site data) when you delete it or the app restarts. It does not hide your activity from websites, your network, or your employer/ISP.</string>
@@ -157,7 +157,7 @@
     <string name="reopen_closed">Reopen closed tab</string>
     <string name="reset_session">Clear session data…</string>
     <string name="reset_session_confirm">This permanently removes the selected login data and website storage for this session only. Other sessions are not affected.</string>
-    <string name="reset_session_confirm_shared">WARNING: this device’s WebView does not support isolated profiles, so cookies and site data are shared between ALL sessions. Clearing will log you out everywhere.</string>
+    <string name="reset_session_confirm_shared">This clears the selected data for this session only.</string>
     <string name="reset_session_title">Clear data of “%1$s”</string>
     <string name="retry">Retry</string>
     <string name="save">Save</string>
@@ -194,4 +194,16 @@
         <item quantity="one">%d tab</item>
         <item quantity="other">%d tabs</item>
     </plurals>
+
+    <!-- GeckoView engine prompts / media -->
+    <string name="leave_page_title">Leave this page?</string>
+    <string name="leave_page_message">Changes you made may not be saved.</string>
+    <string name="leave">Leave</string>
+    <string name="stay">Stay</string>
+    <string name="repost_title">Resend data?</string>
+    <string name="repost_message">To display this page, the data you entered earlier must be sent again.</string>
+    <string name="resend">Resend</string>
+    <string name="pick_color">Pick a colour (#RRGGBB)</string>
+    <string name="perm_screen_share_unsupported">Screen sharing is not supported in this browser.</string>
+    <string name="download_complete">Saved %1$s to Downloads</string>
 </resources>

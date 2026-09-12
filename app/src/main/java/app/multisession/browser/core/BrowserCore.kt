@@ -3,12 +3,13 @@ package app.multisession.browser.core
 import android.app.Application
 import app.multisession.browser.data.BrowserRepository
 import app.multisession.browser.data.db.AppDatabase
+import app.multisession.browser.engine.DownloadHandler
+import app.multisession.browser.engine.GeckoEngine
+import app.multisession.browser.engine.LocalContentLoader
 import app.multisession.browser.projects.ProjectManager
 import app.multisession.browser.session.SessionIsolation
 import app.multisession.browser.session.SessionManager
 import app.multisession.browser.tabs.TabManager
-import app.multisession.browser.webview.DownloadHandler
-import app.multisession.browser.webview.LocalContentLoader
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,8 +20,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Application-scoped single source of truth. Lives as long as the process does, so
- * WebViews survive Activity recreation (rotation, theme change) without reloading.
+ * Application-scoped single source of truth. Lives as long as the process does, so GeckoSessions
+ * survive Activity recreation (rotation, theme change) without reloading.
  */
 class BrowserCore(val app: Application) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -28,9 +29,10 @@ class BrowserCore(val app: Application) {
 
     val db: AppDatabase = AppDatabase.create(app)
     val repo = BrowserRepository(db)
-    val isolation = SessionIsolation()
+    val engine = GeckoEngine(app)
+    val isolation = SessionIsolation(engine)
     val localContent = LocalContentLoader(app)
-    val projects = ProjectManager(app)
+    val projects = ProjectManager(app, localContent)
     val sessions = SessionManager(this)
     val tabs = TabManager(this)
     val downloads = DownloadHandler(this)
@@ -43,7 +45,7 @@ class BrowserCore(val app: Application) {
                 sessions.initialize()
                 tabs.loadFromDb(repo.tabs.getAll())
                 sessions.startObserving()
-                AppLog.i(TAG, "Core ready. isolation=${isolation.mode} sessions=${sessions.sessions.value.size}")
+                AppLog.i(TAG, "Core ready. engine=${isolation.engineVersion()} sessions=${sessions.sessions.value.size}")
             } catch (t: Throwable) {
                 AppLog.e(TAG, "Core initialisation failed", t)
             } finally {

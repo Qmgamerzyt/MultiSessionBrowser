@@ -3,7 +3,7 @@ package app.multisession.browser.projects
 import android.content.Context
 import android.net.Uri
 import app.multisession.browser.core.AppLog
-import app.multisession.browser.webview.LocalContentLoader
+import app.multisession.browser.engine.LocalContentLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -16,17 +16,15 @@ import java.util.zip.ZipOutputStream
 
 /**
  * Local HTML "project" system. Each project is a folder under filesDir/projects/<id>/ with a
- * project.json ({name, entry}) and is served by [LocalContentLoader] over a secure https origin.
+ * project.json ({name, entry}) and is opened by GeckoView via [LocalContentLoader] (file:// inside the app sandbox).
  *
  * APK generation cannot happen on the device (there is no Android SDK/compiler on a phone), so
  * "Build/Export" is honest: export the project as a ZIP and drop its contents into
  * app/src/main/assets/www/ of this repository -> GitHub Actions builds the APK.
  */
-class ProjectManager(private val context: Context) {
+class ProjectManager(private val context: Context, private val localContent: LocalContentLoader) {
 
-    data class Project(val id: String, val name: String, val entry: String, val dir: File, val fileCount: Int, val modifiedAt: Long) {
-        val url: String get() = LocalContentLoader.projectUrl(id, entry)
-    }
+    data class Project(val id: String, val name: String, val entry: String, val dir: File, val fileCount: Int, val modifiedAt: Long, val url: String)
 
     private val root: File = File(context.filesDir, "projects").apply { mkdirs() }
 
@@ -102,7 +100,7 @@ class ProjectManager(private val context: Context) {
         val entry = json.optString("entry", "index.html")
         if (!File(dir, entry).isFile) return null
         val count = dir.walkTopDown().count { it.isFile && it.name != META }
-        return Project(dir.name, json.optString("name", dir.name), entry, dir, count, dir.lastModified())
+        return Project(dir.name, json.optString("name", dir.name), entry, dir, count, dir.lastModified(), localContent.projectUrl(dir.name, entry))
     }
 
     private fun writeMeta(dir: File, name: String, entry: String) {

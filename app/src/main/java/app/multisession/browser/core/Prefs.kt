@@ -58,7 +58,7 @@ object Prefs {
     val safeBrowsing: Boolean get() = sp.getBoolean(KEY_SAFE_BROWSING, true)
     val openExternalApps: Boolean get() = sp.getBoolean(KEY_OPEN_EXTERNAL_APPS, true)
 
-    /** Maximum number of WebViews kept alive at once (active tab included). */
+    /** Maximum number of open GeckoSessions kept at once (active tab included). */
     val liveTabLimit: Int
         get() = (sp.getString(KEY_LIVE_TAB_LIMIT, "6") ?: "6").toIntOrNull()?.coerceIn(1, 30) ?: 6
 

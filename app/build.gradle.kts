@@ -1,20 +1,41 @@
+import com.android.build.api.variant.FilterConfiguration
+
 plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
+    id("com.android.application")   // AGP 9: Kotlin is compiled by the built-in Kotlin support (no kotlin-android plugin)
     id("com.google.devtools.ksp")
 }
 
+// ---------------------------------------------------------------------------------------------
+// GeckoView (Mozilla Firefox engine) — THE single place where the engine version is defined.
+// To update: change this string to a version listed at
+//   https://maven.mozilla.org/?prefix=maven2/org/mozilla/geckoview/geckoview/
+// then re-check its POM for transitive minimums (Kotlin / androidx.core / compileSdk), see
+// docs/GECKOVIEW_MIGRATION.md. Never use a dynamic range (155.+): pin the exact build id.
+// ---------------------------------------------------------------------------------------------
+val geckoViewVersion = "155.0.20260903215306"
+
 android {
     namespace = "app.multisession.browser"
-    compileSdk = 35
+    compileSdk = 37                 // GeckoView 155's androidx.core 1.19 requires >= API 36.1; Mozilla builds against 37
 
     defaultConfig {
         applicationId = "app.multisession.browser"
-        minSdk = 28          // Android 9 (Pie)
+        minSdk = 28                 // Android 9 (Pie). GeckoView >= 144 itself needs 26.
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.1.2"
+        versionCode = 5
+        versionName = "2.0.0"
         vectorDrawables.useSupportLibrary = true
+    }
+
+    // One APK per device ABI (~90 MB each) instead of one fat APK (~175 MB).
+    // Play Store / AAB builds ignore splits and do their own per-device slicing.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = false
+        }
     }
 
     // Release signing: uses a real keystore when the CI secrets / env vars are present,
@@ -33,8 +54,7 @@ android {
 
     buildTypes {
         release {
-            // Shrinking is intentionally off for the first release so the CI build is deterministic.
-            // Enable isMinifyEnabled/isShrinkResources once you have tested a shrunk build on a device.
+            // Shrinking stays off for the engine-migration release so the CI build is deterministic.
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             val release = signingConfigs.getByName("release")
@@ -48,35 +68,49 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
+        // Built-in Kotlin aligns its jvmTarget with targetCompatibility automatically.
     }
     buildFeatures {
         buildConfig = true
+    }
+    packaging {
+        jniLibs.useLegacyPackaging = false
     }
     lint {
         abortOnError = false
     }
 }
 
+// Distinct versionCode per ABI split (required if both APKs are ever uploaded to a store).
+// arm64-v8a gets the higher code so a 64-bit device prefers it. AAB builds keep the base code.
+val abiVersionCodes = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2)
+androidComponents {
+    onVariants { variant ->
+        variant.outputs.forEach { output ->
+            val abi = output.filters.firstOrNull { it.filterType == FilterConfiguration.FilterType.ABI }?.identifier
+            val base = output.versionCode.orNull ?: 1
+            output.versionCode.set(base * 10 + (abiVersionCodes[abi] ?: 0))
+        }
+    }
+}
+
 dependencies {
-    implementation("androidx.core:core-ktx:1.15.0")
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("androidx.activity:activity-ktx:1.9.3")
-    implementation("androidx.fragment:fragment-ktx:1.8.5")
-    implementation("androidx.recyclerview:recyclerview:1.3.2")
+    // Real Mozilla GeckoView engine (Gecko + SpiderMonkey + Necko), resolved from maven.mozilla.org.
+    implementation("org.mozilla.geckoview:geckoview:$geckoViewVersion")
+
+    // AndroidX — versions match Mozilla's own catalog for this GeckoView release (see prep doc §3).
+    implementation("androidx.core:core-ktx:1.19.0")
+    implementation("androidx.appcompat:appcompat:1.7.1")
+    implementation("androidx.activity:activity-ktx:1.13.0")
+    implementation("androidx.fragment:fragment-ktx:1.8.9")
+    implementation("androidx.recyclerview:recyclerview:1.4.0")
     implementation("androidx.preference:preference-ktx:1.2.1")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-    implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
+    implementation("com.google.android.material:material:1.14.0")
 
-    // Real WebView + Profile (multi-profile isolation) API
-    implementation("androidx.webkit:webkit:1.14.0")
+    // Persistence (Room 2.7+: coroutine/Flow support lives in room-runtime; room-ktx is obsolete)
+    implementation("androidx.room:room-runtime:2.8.5")
+    ksp("androidx.room:room-compiler:2.8.5")
 
-    // Persistence
-    implementation("androidx.room:room-runtime:2.6.1")
-    implementation("androidx.room:room-ktx:2.6.1")
-    ksp("androidx.room:room-compiler:2.6.1")
-
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 }

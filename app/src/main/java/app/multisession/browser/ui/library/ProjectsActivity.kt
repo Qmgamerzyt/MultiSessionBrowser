@@ -20,7 +20,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Local HTML projects: import a ZIP (index.html + css/js/images), import a single HTML file,
- * or paste HTML. Projects are previewed in a real WebView over a secure https:// asset origin.
+ * or paste HTML. Projects are opened by the GeckoView engine from the app's private storage.
  * Export = ZIP you can drop into app/src/main/assets/www/ to ship as a standalone APK via GitHub Actions.
  */
 class ProjectsActivity : SimpleListActivity() {

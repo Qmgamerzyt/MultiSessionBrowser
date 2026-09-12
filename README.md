@@ -1,9 +1,12 @@
 # MultiSession Browser (Android 9+)
 
-A real multi-session Android WebView browser / HTML-to-APK runtime.
-Every **session** is an isolated browsing identity (own cookies, logins, localStorage, IndexedDB, cache,
-service workers) implemented with the AndroidX WebKit **Profile API**; every session holds any number of
-**tabs** that share that identity. Built with the system Android WebView (0 MB engine overhead – no GeckoView).
+A real multi-session Android browser / HTML-to-APK runtime powered by **Mozilla GeckoView** (the Firefox engine),
+version **155.0.20260903215306** (v2.0.0 – migrated from the system WebView).
+Every **session** is an isolated browsing identity (own cookies, logins, localStorage, IndexedDB, service workers,
+site permissions) implemented with GeckoView **session contexts** (`contextId`); every session holds any number of
+**tabs** that share that identity. The engine is downloaded automatically from `maven.mozilla.org` by Gradle.
+APKs are built per ABI (`arm64-v8a`, `armeabi-v7a`, ~90 MB each). See `docs/GECKOVIEW_MIGRATION.md` for the
+engine version location and how to update it.
 
 ## Build the APK with GitHub Actions (no local tools needed)
 
@@ -21,28 +24,27 @@ To use your own key add these repository secrets: `KEYSTORE_BASE64` (`base64 -w0
 `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`.
 
 ## Build locally
-Requirements: JDK 17, Android SDK (platform 35), Gradle 8.9 (or Android Studio Ladybug+).
+Requirements: JDK 17, Android SDK (platform 37, build-tools 36.0.0), Gradle 9.4.1 (or a current Android Studio).
 ```
-gradle wrapper --gradle-version 8.9   # once, generates ./gradlew
+gradle wrapper --gradle-version 9.4.1   # once, generates ./gradlew
 ./gradlew assembleDebug
 ```
-APK: `app/build/outputs/apk/debug/app-debug.apk`.
+APKs: `app/build/outputs/apk/debug/app-arm64-v8a-debug.apk` and `app-armeabi-v7a-debug.apk`.
 
 ## Toolchain (versions verified together)
 | Component | Version |
 |---|---|
-| Android Gradle Plugin | 8.7.3 |
-| Gradle | 8.9 |
-| Kotlin / KSP | 2.0.21 / 2.0.21-1.0.28 |
+| Android Gradle Plugin | 9.2.1 (built-in Kotlin) |
+| Gradle | 9.4.1 |
+| KSP / Room | 2.3.12 / 2.8.5 |
+| GeckoView | 155.0.20260903215306 (`app/build.gradle.kts` → `geckoViewVersion`) |
 | JDK | 17 |
-| compileSdk / targetSdk / minSdk | 35 / 35 / 28 (Android 9) |
-| androidx.webkit (Profile API) | 1.14.0 |
-| Room | 2.6.1 |
+| compileSdk / targetSdk / minSdk | 37 / 35 / 28 (Android 9) |
 
 ## Features
 - Sessions: create, rename, colour, private sessions, duplicate (tabs only – never cookies), reset data, delete.
 - Tabs per session: Chrome-like grid, thumbnails, swipe to close, drag to reorder, reopen closed tab.
-- Real WebView: JavaScript, DOM/IndexedDB storage, WebSockets, popups (`window.open` / `target=_blank`
+- Real Firefox engine (GeckoView): JavaScript, DOM/IndexedDB storage, WebSockets, popups (`window.open` / `target=_blank`
   → new tab in the same session), file upload incl. camera capture, downloads with per-session cookies,
   camera/microphone (WebRTC) & location prompts, fullscreen video, HTTP auth, SSL warnings.
 - Persistence: Room/SQLite (WAL) – sessions, tabs, per-session history, global + session bookmarks; the

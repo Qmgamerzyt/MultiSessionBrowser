@@ -18,8 +18,12 @@ data class SessionEntity(
     val sortOrder: Int = 0,
 )
 
-/** Name of the isolated WebView profile backing a session (stable, derived from the id). */
-val SessionEntity.profileName: String get() = "session-$id"
+/**
+ * GeckoView session context id (Gecko "contextual identity") backing a session: stable, derived
+ * from the id. All GeckoSessions of the session use it -> shared cookies/storage inside the
+ * session, complete separation from every other session.
+ */
+val SessionEntity.contextId: String get() = "session-$id"
 
 @Entity(
     tableName = "tabs",
@@ -40,6 +44,8 @@ data class TabEntity(
     val createdAt: Long,
     val lastActiveAt: Long,
     val desktopMode: Boolean = false,
+    /** Serialised GeckoSession.SessionState (history, scroll, form data) - null for start-page tabs. Added in DB v2. */
+    val sessionState: String? = null,
 )
 
 @Entity(

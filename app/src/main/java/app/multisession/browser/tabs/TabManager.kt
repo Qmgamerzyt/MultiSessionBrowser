@@ -1,28 +1,25 @@
 package app.multisession.browser.tabs
 
-import android.app.Activity
 import android.content.ComponentCallbacks2
-import android.content.MutableContextWrapper
-import android.os.Bundle
-import android.view.ViewGroup
-import android.webkit.WebView
 import app.multisession.browser.core.AppLog
 import app.multisession.browser.core.BrowserCore
 import app.multisession.browser.core.Prefs
 import app.multisession.browser.core.UrlUtils
 import app.multisession.browser.data.db.HistoryEntity
 import app.multisession.browser.data.db.TabEntity
-import app.multisession.browser.webview.BrowserHost
-import app.multisession.browser.webview.WebViewFactory
+import app.multisession.browser.engine.BrowserHost
+import app.multisession.browser.engine.SessionFactory
+import org.mozilla.geckoview.GeckoSession
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArraySet
 
 /**
- * Owns every Tab of every session (in memory) and the WebView lifecycle:
- *  - active tab: fully alive and attached to the Activity
- *  - background tabs: kept alive up to [Prefs.liveTabLimit] (most recently used first)
- *  - beyond the limit / under memory pressure: saveState() -> destroy(); recreated lazily
- * Tab metadata is persisted to Room so everything is restored after process death.
+ * Owns every Tab of every browser session (in memory) and the GeckoSession lifecycle:
+ *  - displayed tab: GeckoSession open, active and attached to the Activity's GeckoView
+ *  - background tabs: GeckoSession kept open (inactive) up to [Prefs.liveTabLimit], most recently used first
+ *  - beyond the limit / under memory pressure: SessionState kept -> session.close(); re-opened lazily
+ * Tab metadata + SessionState are persisted to Room so everything is restored after process death.
+ * Nothing here destroys/recreates sessions during ordinary tab switching.
  */
 class TabManager(private val core: BrowserCore) {
 
@@ -35,7 +32,7 @@ class TabManager(private val core: BrowserCore) {
     private val recentlyClosed = ArrayDeque<TabEntity>()
     private val listeners = CopyOnWriteArraySet<Listener>()
 
-    /** The foreground Activity (set in onStart / cleared in onStop). UI callbacks from WebViews go through it. */
+    /** The foreground Activity (set in onStart / cleared in onStop). UI callbacks from the engine go through it. */
     var host: BrowserHost? = null
 
     fun addListener(l: Listener) = listeners.add(l)
@@ -61,11 +58,11 @@ class TabManager(private val core: BrowserCore) {
         return preferred ?: tabsFor(sessionId).maxByOrNull { it.lastActiveAt }
     }
 
-    fun findByWebView(webView: WebView): Tab? = tabs.values.firstOrNull { it.webView === webView }
+    fun findBySession(session: GeckoSession): Tab? = tabs.values.firstOrNull { it.geckoSession === session }
 
     fun hasRecentlyClosed(sessionId: String): Boolean = recentlyClosed.any { it.sessionId == sessionId }
 
-    fun liveCount(): Int = tabs.values.count { it.webView != null }
+    fun liveCount(): Int = tabs.values.count { it.geckoSession != null }
 
     // ------------------------------------------------------------------ mutations
 
@@ -93,6 +90,19 @@ class TabManager(private val core: BrowserCore) {
         return tab
     }
 
+    /**
+     * window.open / target=_blank: a new tab in the opener's browser session whose GeckoSession is
+     * configured (same contextId) but NOT opened - Gecko opens it itself after NavigationDelegate.onNewSession.
+     */
+    fun createPopupTab(opener: Tab, uri: String): Tab? {
+        val session = core.sessions.get(opener.sessionId) ?: return null
+        val tab = createTab(opener.sessionId, uri, select = false, openerTabId = opener.id)
+        tab.geckoSession = SessionFactory.create(core, tab, session)
+        tab.awaitingDisplay = true
+        AppLog.i(TAG, "Popup tab ${tab.id.take(8)} prepared for ${uri.take(60)}")
+        return tab
+    }
+
     fun selectTab(tab: Tab) {
         tab.lastActiveAt = System.currentTimeMillis()
         core.sessions.setActiveTab(tab.sessionId, tab.id)
@@ -104,7 +114,7 @@ class TabManager(private val core: BrowserCore) {
         val tab = tabs.remove(tabId) ?: return null
         val sessionId = tab.sessionId
         val oldIndex = tab.position
-        destroyWebView(tab)
+        closeSession(tab)
         if (!tab.isStartPage) rememberClosed(tab.toEntity())
         renumber(sessionId)
         val remaining = tabsFor(sessionId)
@@ -121,7 +131,7 @@ class TabManager(private val core: BrowserCore) {
     fun closeAllTabs(sessionId: String) {
         tabsFor(sessionId).forEach { t ->
             tabs.remove(t.id)
-            destroyWebView(t)
+            closeSession(t)
             if (!t.isStartPage) rememberClosed(t.toEntity())
         }
         core.persist { core.repo.tabs.deleteForSession(sessionId) }
@@ -135,6 +145,7 @@ class TabManager(private val core: BrowserCore) {
         val tab = createTab(sessionId, e.url, select = true)
         tab.title = e.title
         tab.desktopMode = e.desktopMode
+        tab.savedState = e.sessionState?.let { runCatching { GeckoSession.SessionState.fromString(it) }.getOrNull() }
         return tab
     }
 
@@ -148,11 +159,11 @@ class TabManager(private val core: BrowserCore) {
         notifyTabsChanged(sessionId)
     }
 
-    /** Removes every tab of a session from memory and destroys their WebViews (used when deleting a session). */
+    /** Removes every tab of a browser session from memory and closes their GeckoSessions (used when deleting a session). */
     fun destroySession(sessionId: String) {
         tabsFor(sessionId).forEach { t ->
             tabs.remove(t.id)
-            destroyWebView(t)
+            closeSession(t)
         }
         recentlyClosed.removeAll { it.sessionId == sessionId }
     }
@@ -211,73 +222,85 @@ class TabManager(private val core: BrowserCore) {
     fun notifyTabUpdated(tab: Tab) = listeners.forEach { it.onTabUpdated(tab) }
     private fun notifyTabsChanged(sessionId: String) = listeners.forEach { it.onTabsChanged(sessionId) }
 
-    // ------------------------------------------------------------------ WebView lifecycle
+    // ------------------------------------------------------------------ GeckoSession lifecycle
 
     /**
-     * Returns the tab's WebView, creating it (bound to the session's isolated profile) when needed.
-     * With [loadContent] the previous state is restored or the URL is loaded.
+     * Returns the tab's open GeckoSession, creating it (bound to the browser session's contextId)
+     * when needed. With [loadContent] the saved state is restored or the URL is loaded.
      */
-    fun ensureWebView(tab: Tab, activity: Activity, loadContent: Boolean = true): WebView {
-        tab.webView?.let { existing ->
-            rebindContext(existing, activity)
+    fun ensureSession(tab: Tab, loadContent: Boolean = true): GeckoSession {
+        tab.geckoSession?.let { existing ->
+            if (existing.isOpen) return existing
+            // A session Gecko closed (content process gone) can be reopened as-is.
+            existing.open(core.engine.runtime)
+            if (loadContent) restoreOrLoad(tab, existing)
             return existing
         }
         val session = core.sessions.get(tab.sessionId)
             ?: throw IllegalStateException("Session ${tab.sessionId} not found for tab ${tab.id}")
-        val webView = WebViewFactory.create(activity, tab, session, core)
-        tab.webView = webView
-        AppLog.i(TAG, "WebView created tab=${tab.id.take(8)} profile=${core.isolation.profileName(session)} live=${liveCount()}")
-        if (loadContent) {
-            var restored = false
-            tab.savedState?.let { state ->
-                restored = try {
-                    webView.restoreState(state) != null
-                } catch (t: Throwable) {
-                    AppLog.w(TAG, "restoreState failed", t); false
-                }
-                tab.savedState = null
-            }
-            if (!restored && !tab.isStartPage) webView.loadUrl(tab.url)
-        }
-        return webView
+        val gs = SessionFactory.create(core, tab, session)
+        gs.open(core.engine.runtime)
+        tab.geckoSession = gs
+        AppLog.i(TAG, "GeckoSession opened tab=${tab.id.take(8)} context=${core.isolation.contextId(session).take(16)} live=${liveCount()}")
+        if (loadContent) restoreOrLoad(tab, gs)
+        return gs
     }
 
-    /** Saves navigation state and destroys the WebView; the tab can be recreated later. */
-    fun hibernate(tab: Tab) {
-        val wv = tab.webView ?: return
-        val bundle = Bundle()
-        try {
-            wv.saveState(bundle)
-        } catch (t: Throwable) {
-            AppLog.w(TAG, "saveState failed", t)
+    private fun restoreOrLoad(tab: Tab, gs: GeckoSession) {
+        val state = tab.savedState
+        if (state != null) {
+            try {
+                gs.restoreState(state)
+                return
+            } catch (t: Throwable) {
+                AppLog.w(TAG, "restoreState failed", t)
+                tab.savedState = null
+            }
         }
-        tab.savedState = if (bundle.isEmpty) null else bundle
-        destroyWebView(tab)
+        if (!tab.isStartPage) gs.load(GeckoSession.Loader().uri(tab.url))
+    }
+
+    /** Keeps the (already up-to-date) SessionState and closes the GeckoSession; the tab can be re-opened later. */
+    fun hibernate(tab: Tab) {
+        if (tab.geckoSession == null) return
+        closeSession(tab)
         AppLog.i(TAG, "Tab hibernated ${tab.id.take(8)} live=${liveCount()}")
     }
 
-    fun destroyWebView(tab: Tab) {
-        val wv = tab.webView ?: return
-        tab.webView = null
+    fun closeSession(tab: Tab) {
+        val gs = tab.geckoSession ?: return
+        host?.onSessionClosing(tab)
+        tab.geckoSession = null
         tab.isLoading = false
+        tab.awaitingDisplay = false
         try {
-            (wv.parent as? ViewGroup)?.removeView(wv)
-            wv.stopLoading()
-            wv.onPause()
-            wv.webChromeClient = null
-            wv.destroy()
+            if (gs.isOpen) gs.close()
         } catch (t: Throwable) {
-            AppLog.w(TAG, "destroy failed", t)
+            AppLog.w(TAG, "close failed", t)
         }
-        (wv.context as? MutableContextWrapper)?.baseContext = core.app
-        AppLog.d(TAG, "WebView destroyed tab=${tab.id.take(8)}")
+        AppLog.d(TAG, "GeckoSession closed tab=${tab.id.take(8)}")
     }
 
-    /** Keeps at most [Prefs.liveTabLimit] WebViews alive (the active one always survives). */
+    /** Marks [displayed] active/focused and every other live session inactive (saves CPU; audio keeps playing). */
+    fun setDisplayed(displayed: Tab?) {
+        tabs.values.forEach { t ->
+            val gs = t.geckoSession ?: return@forEach
+            if (!gs.isOpen) return@forEach
+            val isIt = t === displayed
+            try {
+                gs.setActive(isIt)
+                gs.setFocused(isIt)
+            } catch (t2: Throwable) {
+                AppLog.w(TAG, "setActive failed", t2)
+            }
+        }
+    }
+
+    /** Keeps at most [Prefs.liveTabLimit] GeckoSessions open (the active one always survives). */
     fun enforceLiveLimit(activeTabId: String?) {
         val keepBackground = (Prefs.liveTabLimit - 1).coerceAtLeast(0)
         val background = tabs.values
-            .filter { it.webView != null && it.id != activeTabId }
+            .filter { it.geckoSession != null && it.id != activeTabId && !it.awaitingDisplay }
             .sortedByDescending { it.lastActiveAt }
         background.drop(keepBackground).forEach { hibernate(it) }
     }
@@ -285,47 +308,48 @@ class TabManager(private val core: BrowserCore) {
     fun onTrimMemory(level: Int) {
         val activeId = core.sessions.activeId?.let { activeTab(it)?.id }
         when {
-            level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> hibernateAll(exceptTabId = null)
+            level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> hibernateAll(exceptTabId = activeId) // keep the visible/last tab (may be playing audio)
             level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND ||
                 level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> hibernateAll(exceptTabId = activeId)
             level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> {
-                tabs.values.filter { it.webView != null && it.id != activeId }
+                tabs.values.filter { it.geckoSession != null && it.id != activeId }
                     .sortedByDescending { it.lastActiveAt }.drop(1).forEach { hibernate(it) }
             }
         }
     }
 
     private fun hibernateAll(exceptTabId: String?) {
-        tabs.values.filter { it.webView != null && it.id != exceptTabId }.forEach { hibernate(it) }
+        tabs.values.filter { it.geckoSession != null && it.id != exceptTabId }.forEach { hibernate(it) }
     }
 
-    /** Re-applies user settings (JS, UA, zoom...) to every live WebView after Settings changed. */
+    /** Re-applies user settings (JS, UA, zoom, cookies...) to the runtime and every live session after Settings changed. */
     fun reapplySettings() {
+        core.engine.applyGlobalSettings()
         tabs.values.forEach { tab ->
-            val wv = tab.webView ?: return@forEach
             val session = core.sessions.get(tab.sessionId) ?: return@forEach
-            WebViewFactory.applySettings(wv, session, tab, core)
+            SessionFactory.applyTabSettings(tab, session)
         }
     }
 
-    private fun rebindContext(webView: WebView, activity: Activity) {
-        (webView.context as? MutableContextWrapper)?.let { if (it.baseContext !== activity) it.baseContext = activity }
-    }
-
-    /** Called when the Activity is destroyed: detach views and drop Activity references (no leaks). */
+    /** Called when the Activity is destroyed: drop Activity references held by live sessions (no leaks). */
     fun detachFromActivity() {
         tabs.values.forEach { tab ->
-            val wv = tab.webView ?: return@forEach
-            (wv.parent as? ViewGroup)?.removeView(wv)
-            (wv.context as? MutableContextWrapper)?.baseContext = core.app
+            val gs = tab.geckoSession ?: return@forEach
+            try { gs.selectionActionDelegate = null } catch (_: Throwable) {}
         }
     }
 
-    fun onRenderProcessGone(tab: Tab) {
-        AppLog.w(TAG, "Render process gone for tab ${tab.id.take(8)}")
-        destroyWebView(tab)
-        tab.error = PageError(ERROR_RENDERER_GONE, "Renderer process terminated", tab.url)
+    /** The tab's content process crashed or was killed; Gecko already closed the GeckoSession. */
+    fun onContentProcessGone(tab: Tab, crashed: Boolean) {
+        host?.onSessionClosing(tab)
+        val gs = tab.geckoSession
+        tab.geckoSession = null
+        tab.isLoading = false
+        tab.awaitingDisplay = false
+        try { if (gs != null && gs.isOpen) gs.close() } catch (_: Throwable) {}
+        if (crashed) tab.error = PageError(ERROR_RENDERER_GONE, 0, "Content process terminated", tab.url)
         notifyTabUpdated(tab)
+        host?.onContentProcessGone(tab, crashed)
     }
 
     companion object {

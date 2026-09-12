@@ -2,10 +2,10 @@ package app.multisession.browser.core
 
 import android.net.Uri
 import android.util.Patterns
-import app.multisession.browser.webview.LocalContentLoader
+import app.multisession.browser.engine.LocalContentLoader
 
 object UrlUtils {
-    /** Internal marker URL for the native start page (never loaded into a WebView). */
+    /** Internal marker URL for the native start page (never loaded into the engine). */
     const val START_PAGE = "about:start"
 
     fun isStartPage(url: String?): Boolean =
@@ -18,7 +18,7 @@ object UrlUtils {
 
     fun isSecure(url: String?): Boolean = url?.lowercase()?.startsWith("https://") == true
 
-    fun isLocalContent(url: String?): Boolean = url?.startsWith(LocalContentLoader.BASE) == true
+    fun isLocalContent(url: String?): Boolean = LocalContentLoader.isLocalUrl(url)
 
     /**
      * Address-bar resolution:

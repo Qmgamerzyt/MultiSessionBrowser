@@ -13,8 +13,8 @@
         <item>custom</item>
     </string-array>
     <string-array name="ua_names">
-        <item>Default (Android WebView)</item>
-        <item>Mobile (Chrome-compatible, hides WebView marker)</item>
+        <item>Default (Firefox for Android)</item>
+        <item>Mobile (same as default)</item>
         <item>Custom</item>
     </string-array>
     <string-array name="ua_values">
@@ -33,8 +33,8 @@
         <item>dark</item>
     </string-array>
     <string-array name="live_tab_names">
-        <item>3 (low memory devices)</item>
-        <item>6 (recommended)</item>
+        <item>3 (low memory devices, recommended for Gecko)</item>
+        <item>6</item>
         <item>10</item>
         <item>15</item>
     </string-array>

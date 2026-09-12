@@ -8,15 +8,12 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
-import android.net.http.SslError
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.provider.MediaStore
 import android.text.format.Formatter
 import android.view.LayoutInflater
@@ -25,14 +22,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
-import android.webkit.GeolocationPermissions
-import android.webkit.HttpAuthHandler
-import android.webkit.PermissionRequest
-import android.webkit.SslErrorHandler
-import android.webkit.ValueCallback
-import android.webkit.WebChromeClient
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -60,6 +49,9 @@ import app.multisession.browser.core.Prefs
 import app.multisession.browser.core.UrlUtils
 import app.multisession.browser.data.db.BookmarkEntity
 import app.multisession.browser.data.db.SessionEntity
+import app.multisession.browser.engine.BrowserHost
+import app.multisession.browser.engine.DownloadHandler
+import app.multisession.browser.engine.SessionFactory
 import app.multisession.browser.tabs.PageError
 import app.multisession.browser.tabs.Tab
 import app.multisession.browser.tabs.TabManager
@@ -71,15 +63,31 @@ import app.multisession.browser.ui.sessions.SessionEditDialog
 import app.multisession.browser.ui.sessions.SessionsSheet
 import app.multisession.browser.ui.settings.SettingsActivity
 import app.multisession.browser.ui.tabs.TabsSheet
-import app.multisession.browser.webview.BrowserHost
-import app.multisession.browser.webview.DownloadHandler
-import app.multisession.browser.webview.WebViewFactory
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.launch
+import org.mozilla.geckoview.BasicSelectionActionDelegate
+import org.mozilla.geckoview.GeckoResult
+import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSession.PermissionDelegate.ContentPermission
+import org.mozilla.geckoview.GeckoSession.PermissionDelegate.MediaSource
+import org.mozilla.geckoview.GeckoView
+import org.mozilla.geckoview.GeckoWebExecutor
+import org.mozilla.geckoview.WebRequest
+import org.mozilla.geckoview.WebRequestError
+import org.mozilla.geckoview.WebResponse
 import java.io.File
 import java.net.URISyntaxException
 
+/**
+ * The browser screen. One [GeckoView] displays the GeckoSession of the current tab; sessions are
+ * swapped in/out on tab switch (never destroyed for that). The native start page replaces the
+ * GeckoView for empty tabs.
+ *
+ * Focus rules (v1.1.2 fix, preserved): the invisible focusHolder is the first focusable view, the
+ * URL bar only gains focus from an explicit user tap, and returning to the app never rebuilds or
+ * re-attaches the displayed content view - so a focused web input (e.g. OTP field) keeps focus.
+ */
 class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, StartPageController.Callbacks {
 
     private val core get() = BrowserApp.core()
@@ -89,6 +97,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
     private lateinit var root: View
     private lateinit var browserRoot: View
     private lateinit var isolationBanner: TextView
+    private lateinit var topBar: View
+    private lateinit var bottomBar: View
     private lateinit var sessionChip: View
     private lateinit var sessionDot: View
     private lateinit var sessionName: TextView
@@ -104,18 +114,19 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
     private lateinit var tabCountView: TextView
     private lateinit var fullscreenContainer: FrameLayout
 
+    /** Created lazily and attached to [webContainer] only together with an OPEN session (see attachSession). */
+    private var geckoView: GeckoView? = null
+
     private var startPage: StartPageController? = null
     private var currentTabId: String? = null
     private var uiReady = false
-
-    private var customView: View? = null
-    private var customViewCallback: WebChromeClient.CustomViewCallback? = null
+    private var inFullScreen = false
     private lateinit var suggestionPopup: SuggestionPopup
 
-    private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
+    private var fileResultCallback: ((Array<Uri>?) -> Unit)? = null
     private var cameraOutputUri: Uri? = null
     private var pendingPermissionAction: ((Map<String, Boolean>) -> Unit)? = null
-    private var activePermissionDialog: Pair<PermissionRequest, AlertDialog>? = null
+    private var activePermissionDialog: AlertDialog? = null
 
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         handleFileChooserResult(result.resultCode, result.data)
@@ -182,37 +193,30 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         val session = core.sessions.active.value
         val tab = currentTab
         if (session != null && tab != null && tab.sessionId == session.id && isDisplayed(tab)) {
-            // Same tab is still on screen: only resume it. Rebuilding the hierarchy here used to
-            // detach the focused WebView, which made the framework move focus to the URL bar and
-            // open the keyboard for it (OTP paste ended up in the address bar).
-            tab.webView?.onResume()
-            tab.webView?.resumeTimers()
+            // Same tab is still on screen: leave the GeckoView and its session exactly as they are.
+            // Re-attaching/reloading here would move Android focus to the URL bar and open the keyboard
+            // (the OTP-paste bug). The page keeps its own focus (e.g. the OTP input).
+            core.tabs.setDisplayed(tab)
             updateToolbar(tab)
         } else {
             showActiveSessionTab()
         }
     }
 
-    /** True when [tab]'s content view (WebView or native start page) is the one currently attached. */
+    /** True when [tab]'s content (its GeckoSession in the GeckoView, or the native start page) is what is on screen. */
     private fun isDisplayed(tab: Tab): Boolean {
-        val wv = tab.webView
-        return if (wv != null) wv.parent === webContainer
+        val gv = geckoView
+        val gs = tab.geckoSession
+        return if (gs != null) gv != null && gv.parent === webContainer && gv.isVisible && gv.session === gs
         else tab.isStartPage && startPage?.view?.parent === webContainer
-    }
-
-    override fun onResume() {
-        super.onResume()
-        if (!uiReady) return
     }
 
     override fun onStop() {
         super.onStop()
         if (!uiReady) return
-        currentTab?.let { tab ->
-            captureThumbnail(tab)
-            tab.webView?.onPause()
-            tab.webView?.pauseTimers()
-        }
+        // The displayed session stays ACTIVE in the background on purpose: audio / voice calls
+        // (Discord) keep running and the page keeps its input focus for when the user returns.
+        currentTab?.let { captureThumbnail(it) }
         core.tabs.persistAll()
         if (core.tabs.host === this) core.tabs.host = null
     }
@@ -222,9 +226,16 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
             core.tabs.removeListener(this)
             core.tabs.detachFromActivity()
         }
-        activePermissionDialog?.second?.dismiss()
+        // Give the session back so a recreated Activity can attach it to its own GeckoView.
+        try { geckoView?.releaseSession() } catch (t: Throwable) { AppLog.w(TAG, "releaseSession failed", t) }
+        activePermissionDialog?.dismiss()
         if (::suggestionPopup.isInitialized) suggestionPopup.dismiss()
         super.onDestroy()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        core.engine.onConfigurationChanged()
     }
 
     // ================================================================== view binding
@@ -233,6 +244,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         root = findViewById(R.id.root)
         browserRoot = findViewById(R.id.browserRoot)
         isolationBanner = findViewById(R.id.isolationBanner)
+        topBar = findViewById(R.id.topBar)
+        bottomBar = findViewById(R.id.bottomBar)
         sessionChip = findViewById(R.id.sessionChip)
         sessionDot = findViewById(R.id.sessionDot)
         sessionName = findViewById(R.id.sessionName)
@@ -279,10 +292,10 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         })
         reloadStopButton.setOnClickListener {
             val tab = currentTab ?: return@setOnClickListener
-            if (tab.isLoading) tab.webView?.stopLoading() else reload(tab)
+            if (tab.isLoading) tab.geckoSession?.stop() else reload(tab)
         }
         backButton.setOnClickListener { goBack() }
-        forwardButton.setOnClickListener { currentTab?.webView?.let { if (it.canGoForward()) it.goForward() } }
+        forwardButton.setOnClickListener { currentTab?.let { t -> if (t.canGoForward) t.geckoSession?.goForward() } }
         findViewById<View>(R.id.newTabButton).setOnClickListener { newTab() }
         findViewById<View>(R.id.tabsButton).setOnClickListener { TabsSheet().show(supportFragmentManager, "tabs") }
         findViewById<View>(R.id.menuButton).setOnClickListener { showMenu(it) }
@@ -290,7 +303,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         findViewById<View>(R.id.errorRetry).setOnClickListener { currentTab?.let { reload(it) } }
         findViewById<View>(R.id.errorBack).setOnClickListener {
             val tab = currentTab ?: return@setOnClickListener
-            if (tab.webView?.canGoBack() == true) { tab.error = null; tab.webView?.goBack() } else loadInTab(tab, UrlUtils.START_PAGE)
+            if (tab.canGoBack && tab.geckoSession != null) { tab.error = null; tab.geckoSession?.goBack() } else loadInTab(tab, UrlUtils.START_PAGE)
         }
         findViewById<View>(R.id.errorExternal).setOnClickListener { currentTab?.error?.url?.let { openExternal(it) } }
 
@@ -298,6 +311,48 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
             navigate(item.url)
         }
         suggestionPopup.anchor(findViewById(R.id.urlBox))
+    }
+
+    /** The single GeckoView of this Activity (created on first use). */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun obtainGeckoView(): GeckoView = geckoView ?: GeckoView(this).also { gv ->
+        gv.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        gv.setOnTouchListener(webTouchListener)
+        geckoView = gv
+    }
+
+    /**
+     * Shows [gs] in the GeckoView. The view is added to the hierarchy only once it has an OPEN
+     * session (GeckoView would otherwise create its own session/runtime on attach). Switching tabs
+     * only swaps the session - nothing is destroyed or recreated.
+     */
+    private fun attachSession(tab: Tab, gs: GeckoSession) {
+        if (!gs.isOpen) {
+            // Popup sessions are opened by Gecko itself right after onNewSession; they are shown from onPageStart.
+            AppLog.w(TAG, "attachSession skipped: session of ${tab.id.take(8)} is not open yet")
+            return
+        }
+        val gv = obtainGeckoView()
+        try {
+            if (gv.session !== gs) {
+                gv.releaseSession()
+                gv.setSession(gs)
+            }
+            gs.selectionActionDelegate = BasicSelectionActionDelegate(this)
+        } catch (t: Throwable) {
+            AppLog.e(TAG, "attachSession failed for ${tab.id.take(8)}", t)
+        }
+        if (gv.parent !== webContainer) {
+            (gv.parent as? ViewGroup)?.removeView(gv)
+            webContainer.addView(gv, 0)
+        }
+        gv.isVisible = true
+    }
+
+    private fun detachGeckoSession() {
+        val gv = geckoView ?: return
+        try { gv.releaseSession() } catch (t: Throwable) { AppLog.w(TAG, "releaseSession failed", t) }
+        gv.isVisible = false
     }
 
     // ================================================================== search / focus state
@@ -325,7 +380,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
             if (urlInput.hasFocus()) exitSearchMode()
             if (!v.hasFocus()) v.requestFocus()
         }
-        false // never consume: the WebView handles the event normally
+        false // never consume: the GeckoView handles the event normally
     }
 
     // ================================================================== session / tab display
@@ -343,32 +398,33 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         val previous = currentTab
         if (previous != null && previous.id != tab.id) {
             captureThumbnail(previous)
-            previous.webView?.onPause()
+            if (inFullScreen) {
+                // Leaving a fullscreen video by switching tabs: restore the chrome now (previous is still current).
+                previous.geckoSession?.exitFullScreen()
+                onFullScreenChanged(previous, false)
+            }
         }
         currentTabId = tab.id
         core.tabs.selectTab(tab)
         exitSearchMode()
 
-        if (tab.isStartPage && tab.webView == null) {
-            webContainer.removeAllViews()
+        if (tab.isStartPage && tab.geckoSession == null) {
+            detachGeckoSession()
+            core.tabs.setDisplayed(null)
             showStartPage(tab)
         } else {
-            val wv = core.tabs.ensureWebView(tab, this)
-            wv.setOnTouchListener(webTouchListener)
-            if (wv.parent !== webContainer) {
-                webContainer.removeAllViews()
-                (wv.parent as? ViewGroup)?.removeView(wv)
-                webContainer.addView(wv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            } else {
-                // Already attached (e.g. re-shown after resume): keep it in place so it does not lose
-                // focus; just drop any other child such as the start page.
-                for (i in webContainer.childCount - 1 downTo 0) {
-                    val child = webContainer.getChildAt(i)
-                    if (child !== wv) webContainer.removeViewAt(i)
-                }
+            val gs = try {
+                core.tabs.ensureSession(tab)
+            } catch (t: Throwable) {
+                AppLog.e(TAG, "ensureSession failed", t)
+                tab.error = PageError(TabManager.ERROR_RENDERER_GONE, 0, t.message ?: "", tab.url)
+                null
             }
-            wv.onResume()
-            wv.resumeTimers()
+            startPage?.view?.let { if (it.parent === webContainer) webContainer.removeView(it) }
+            if (gs != null) {
+                attachSession(tab, gs)
+                core.tabs.setDisplayed(tab)
+            }
         }
         updateToolbar(tab)
         updateErrorPage(tab)
@@ -380,14 +436,16 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         val controller = startPage ?: StartPageController(
             LayoutInflater.from(this).inflate(R.layout.view_start_page, webContainer, false), core, this
         ).also { startPage = it }
-        (controller.view.parent as? ViewGroup)?.removeView(controller.view)
-        webContainer.addView(controller.view)
+        if (controller.view.parent !== webContainer) {
+            (controller.view.parent as? ViewGroup)?.removeView(controller.view)
+            webContainer.addView(controller.view)
+        }
         lifecycleScope.launch { controller.refresh(tab.sessionId) }
     }
 
     override fun switchSession(sessionId: String) {
         lifecycleScope.launch {
-            currentTab?.let { captureThumbnail(it); it.webView?.onPause() }
+            currentTab?.let { captureThumbnail(it) }
             core.sessions.switchTo(sessionId) ?: return@launch
             currentTabId = null
             showActiveSessionTab()
@@ -425,11 +483,15 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
             tab.savedState = null
             tab.url = UrlUtils.START_PAGE
             tab.title = ""
+            tab.canGoBack = false
+            tab.canGoForward = false
             core.tabs.persistTab(tab)
         } else {
-            val wv = core.tabs.ensureWebView(tab, this, loadContent = false)
+            val gs = core.tabs.ensureSession(tab, loadContent = false)
+            tab.savedState = null
             tab.url = url
-            wv.loadUrl(url)
+            tab.title = ""
+            gs.load(GeckoSession.Loader().uri(url))
         }
         if (tab.id == currentTabId) showTab(tab) else core.tabs.persistTab(tab)
     }
@@ -452,26 +514,35 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
 
     private fun reload(tab: Tab) {
         tab.error = null
-        if (tab.isStartPage) showTab(tab) else {
-            val wv = tab.webView
-            if (wv == null) loadInTab(tab, tab.url) else { wv.reload(); updateErrorPage(tab) }
+        if (tab.isStartPage) { showTab(tab); return }
+        val gs = tab.geckoSession
+        if (gs == null || !gs.isOpen) {
+            showTab(tab)   // re-opens the session and restores state / loads the URL
+        } else {
+            gs.reload()
+            updateErrorPage(tab)
         }
     }
 
     private fun goBack() {
         val tab = currentTab ?: return
-        val wv = tab.webView
-        if (wv != null && wv.canGoBack()) { tab.error = null; wv.goBack(); updateErrorPage(tab) }
+        val gs = tab.geckoSession
+        if (gs != null && tab.canGoBack) { tab.error = null; gs.goBack(); updateErrorPage(tab) }
     }
 
     private fun handleBack() {
         val tab = currentTab
         when {
-            customView != null -> onHideCustomView()
+            inFullScreen -> {
+                val gs = tab?.geckoSession
+                if (gs != null) gs.exitFullScreen()          // Gecko answers with onFullScreen(false)
+                else if (tab != null) onFullScreenChanged(tab, false)
+                else inFullScreen = false
+            }
             urlInput.hasFocus() -> exitSearchMode()
-            tab?.webView?.canGoBack() == true -> goBack()
+            tab?.geckoSession != null && tab.canGoBack -> goBack()
             tab?.openerTabId != null -> closeTab(tab)
-            tab != null && !tab.isStartPage && tab.webView == null -> loadInTab(tab, UrlUtils.START_PAGE)
+            tab != null && !tab.isStartPage && tab.geckoSession == null -> loadInTab(tab, UrlUtils.START_PAGE)
             else -> moveTaskToBack(true) // never kill the app on back; state is kept
         }
     }
@@ -493,18 +564,19 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         securityIcon.setImageResource(
             when {
                 tab.isStartPage -> R.drawable.ic_search
-                UrlUtils.isSecure(tab.url) || UrlUtils.isLocalContent(tab.url) -> R.drawable.ic_lock
+                UrlUtils.isLocalContent(tab.url) -> R.drawable.ic_lock
+                UrlUtils.isSecure(tab.url) && (tab.isSecure || tab.isLoading) -> R.drawable.ic_lock
                 else -> R.drawable.ic_info
             }
         )
         reloadStopButton.setImageResource(if (tab.isLoading) R.drawable.ic_close else R.drawable.ic_refresh)
         reloadStopButton.contentDescription = getString(if (tab.isLoading) R.string.stop else R.string.reload)
-        progressBar.isVisible = tab.isLoading && tab.progress < 100
+        progressBar.isVisible = tab.isLoading && tab.progress < 100 && !inFullScreen
         progressBar.progress = tab.progress
-        val wv = tab.webView
-        backButton.isEnabled = wv?.canGoBack() == true
+        val live = tab.geckoSession != null
+        backButton.isEnabled = live && tab.canGoBack
         backButton.alpha = if (backButton.isEnabled) 1f else 0.35f
-        forwardButton.isEnabled = wv?.canGoForward() == true
+        forwardButton.isEnabled = live && tab.canGoForward
         forwardButton.alpha = if (forwardButton.isEnabled) 1f else 0.35f
     }
 
@@ -515,8 +587,9 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
     }
 
     private fun updateIsolationBanner() {
+        // GeckoView isolates every session via its contextId on every device: the banner only exists
+        // for the (now impossible) shared-storage case.
         isolationBanner.isVisible = !core.isolation.isIsolated
-        if (!core.isolation.isIsolated) isolationBanner.text = getString(R.string.isolation_banner)
     }
 
     private fun showIsolationInfo() {
@@ -540,15 +613,20 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
 
     private fun describeError(err: PageError): Pair<String, String> {
         val offline = isOffline()
-        return when (err.code) {
-            TabManager.ERROR_RENDERER_GONE -> getString(R.string.err_crash_title) to getString(R.string.err_crash_msg)
-            WebViewClient.ERROR_HOST_LOOKUP -> if (offline) getString(R.string.err_offline_title) to getString(R.string.err_offline_msg)
-            else getString(R.string.err_host_title) to getString(R.string.err_host_msg)
-            WebViewClient.ERROR_CONNECT, WebViewClient.ERROR_TIMEOUT, WebViewClient.ERROR_IO ->
+        return when {
+            err.code == TabManager.ERROR_RENDERER_GONE || err.code == WebRequestError.ERROR_CONTENT_CRASHED ->
+                getString(R.string.err_crash_title) to getString(R.string.err_crash_msg)
+            err.code == WebRequestError.ERROR_UNKNOWN_HOST || err.code == WebRequestError.ERROR_OFFLINE ->
+                if (offline) getString(R.string.err_offline_title) to getString(R.string.err_offline_msg)
+                else getString(R.string.err_host_title) to getString(R.string.err_host_msg)
+            err.code == WebRequestError.ERROR_CONNECTION_REFUSED || err.code == WebRequestError.ERROR_NET_TIMEOUT ||
+                err.code == WebRequestError.ERROR_NET_INTERRUPT || err.code == WebRequestError.ERROR_NET_RESET ->
                 if (offline) getString(R.string.err_offline_title) to getString(R.string.err_offline_msg)
                 else getString(R.string.err_unavailable_title) to getString(R.string.err_unavailable_msg)
-            WebViewClient.ERROR_FAILED_SSL_HANDSHAKE -> getString(R.string.err_ssl_title) to getString(R.string.err_ssl_msg)
-            WebViewClient.ERROR_UNSUPPORTED_SCHEME, WebViewClient.ERROR_BAD_URL -> getString(R.string.err_unsupported_title) to getString(R.string.err_unsupported_msg)
+            err.category == WebRequestError.ERROR_CATEGORY_SECURITY ->
+                getString(R.string.err_ssl_title) to getString(R.string.err_ssl_msg)
+            err.category == WebRequestError.ERROR_CATEGORY_URI || err.code == WebRequestError.ERROR_UNKNOWN_PROTOCOL ->
+                getString(R.string.err_unsupported_title) to getString(R.string.err_unsupported_msg)
             else -> getString(R.string.err_generic_title) to getString(R.string.err_generic_msg, err.description)
         }
     }
@@ -565,8 +643,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         if (tab.id != currentTabId) return
         updateToolbar(tab)
         updateErrorPage(tab)
-        // A start-page tab that gained a WebView (e.g. popup target) must show it.
-        if (tab.webView != null && tab.webView?.parent == null && startPage?.view?.parent != null) showTab(tab)
+        // A start-page tab that gained a session (e.g. popup target) must show it.
+        if (tab.geckoSession != null && !isDisplayed(tab) && !tab.awaitingDisplay && startPage?.view?.parent != null) showTab(tab)
     }
 
     override fun onTabsChanged(sessionId: String) {
@@ -610,12 +688,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
 
     private fun toggleDesktop(tab: Tab) {
         tab.desktopMode = !tab.desktopMode
-        tab.webView?.let {
-            WebViewFactory.applyUserAgent(it, tab.desktopMode)
-            WebViewFactory.applyDesktopScale(it, tab.desktopMode)
-            WebViewFactory.applyDesktopViewport(it, tab.desktopMode)
-            it.reload()
-        }
+        core.sessions.get(tab.sessionId)?.let { SessionFactory.applyTabSettings(tab, it) }
+        tab.geckoSession?.reload()
         core.tabs.persistTab(tab)
         snack(getString(if (tab.desktopMode) R.string.desktop_on else R.string.desktop_off))
     }
@@ -629,12 +703,10 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         startActivity(Intent.createChooser(send, getString(R.string.share)))
     }
 
-    private fun openExternal(url: String) {
-        try {
-            startActivity(Intent.createChooser(Intent(Intent.ACTION_VIEW, Uri.parse(url)), getString(R.string.open_external)))
-        } catch (e: ActivityNotFoundException) {
-            snack(getString(R.string.no_app_found))
-        }
+    private fun openExternal(url: String): Boolean = try {
+        startActivity(Intent.createChooser(Intent(Intent.ACTION_VIEW, Uri.parse(url)), getString(R.string.open_external))); true
+    } catch (e: ActivityNotFoundException) {
+        snack(getString(R.string.no_app_found)); false
     }
 
     private fun openDownloads() {
@@ -678,7 +750,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
             .setPositiveButton(R.string.clear) { _, _ ->
                 MaterialAlertDialogBuilder(this)
                     .setTitle(R.string.confirm)
-                    .setMessage(if (core.isolation.isIsolated) R.string.reset_session_confirm else R.string.reset_session_confirm_shared)
+                    .setMessage(R.string.reset_session_confirm)
                     .setPositiveButton(R.string.clear) { _, _ ->
                         lifecycleScope.launch {
                             core.sessions.clearData(session.id, checked[0], checked[1], checked[2], checked[3])
@@ -700,21 +772,66 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         if (tab.openerTabId != null) closeTab(tab)
     }
 
-    override fun onShowFileChooser(callback: ValueCallback<Array<Uri>>, params: WebChromeClient.FileChooserParams): Boolean {
-        fileChooserCallback?.onReceiveValue(null)
-        fileChooserCallback = callback
+    override fun onSessionClosing(tab: Tab) {
+        val gv = geckoView ?: return
+        val gs = tab.geckoSession ?: return
+        if (gv.session === gs) {
+            try { gv.releaseSession() } catch (t: Throwable) { AppLog.w(TAG, "releaseSession failed", t) }
+            if (tab.id == currentTabId) gv.isVisible = false
+        }
+    }
+
+    override fun onContentProcessGone(tab: Tab, crashed: Boolean) {
+        if (tab.id != currentTabId) return
+        if (crashed) {
+            updateErrorPage(tab)
+            updateToolbar(tab)
+        } else {
+            // Killed for memory while (probably) not visible: transparently re-open from saved state.
+            showTab(tab)
+        }
+    }
+
+    override fun onFullScreenChanged(tab: Tab, fullScreen: Boolean) {
+        if (tab.id != currentTabId) return
+        inFullScreen = fullScreen
+        topBar.isVisible = !fullScreen
+        bottomBar.isVisible = !fullScreen
+        isolationBanner.isVisible = !fullScreen && !core.isolation.isIsolated
+        progressBar.isVisible = !fullScreen && tab.isLoading && tab.progress < 100
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        if (fullScreen) {
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    // ---- file upload -------------------------------------------------------------------------
+
+    override fun pickFiles(mimeTypes: Array<String>?, multiple: Boolean, capture: Boolean, onResult: (Array<Uri>?) -> Unit) {
+        fileResultCallback?.invoke(null)
+        fileResultCallback = onResult
         cameraOutputUri = null
-        val contentIntent = params.createIntent()
-        val acceptsImages = params.acceptTypes.any { it.isBlank() || it == "*/*" || it.startsWith("image") }
+        val types = mimeTypes?.filter { it.isNotBlank() }.orEmpty()
+        val contentIntent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = if (types.size == 1) types[0] else "*/*"
+            if (types.size > 1) putExtra(Intent.EXTRA_MIME_TYPES, types.toTypedArray())
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple)
+        }
+        val acceptsImages = types.isEmpty() || types.any { it == "*/*" || it.startsWith("image") }
         val extras = mutableListOf<Intent>()
         if (acceptsImages && hasPermission(Manifest.permission.CAMERA)) createCameraIntent()?.let { extras += it }
-        val chooser = Intent.createChooser(contentIntent, params.title ?: getString(R.string.choose_file))
+        val chooser = Intent.createChooser(contentIntent, getString(R.string.choose_file))
         if (extras.isNotEmpty()) chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, extras.toTypedArray())
-        return try {
-            fileChooserLauncher.launch(chooser); true
+        try {
+            fileChooserLauncher.launch(chooser)
         } catch (e: ActivityNotFoundException) {
-            fileChooserCallback = null
-            snack(getString(R.string.no_app_found)); false
+            fileResultCallback = null
+            snack(getString(R.string.no_app_found))
+            onResult(null)
         }
     }
 
@@ -731,9 +848,9 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
     }
 
     private fun handleFileChooserResult(resultCode: Int, data: Intent?) {
-        val cb = fileChooserCallback ?: return
-        fileChooserCallback = null
-        if (resultCode != RESULT_OK) { cb.onReceiveValue(null); cameraOutputUri = null; return }
+        val cb = fileResultCallback ?: return
+        fileResultCallback = null
+        if (resultCode != RESULT_OK) { cb(null); cameraOutputUri = null; return }
         val clip: ClipData? = data?.clipData
         val results: Array<Uri>? = when {
             clip != null && clip.itemCount > 0 -> Array(clip.itemCount) { clip.getItemAt(it).uri }
@@ -742,68 +859,120 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
             else -> null
         }
         cameraOutputUri = null
-        cb.onReceiveValue(results)
+        cb(results)
     }
 
-    override fun onPermissionRequest(tab: Tab, request: PermissionRequest) {
-        val wanted = request.resources.filter {
-            it == PermissionRequest.RESOURCE_VIDEO_CAPTURE || it == PermissionRequest.RESOURCE_AUDIO_CAPTURE || it == PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID
+    // ---- permissions --------------------------------------------------------------------------
+
+    /** Gecko needs Android runtime permissions (CAMERA / RECORD_AUDIO / location) before it can ask the page-level question. */
+    override fun onAndroidPermissionsRequest(tab: Tab, permissions: Array<String>, callback: GeckoSession.PermissionDelegate.Callback) {
+        if (permissions.isEmpty()) { callback.grant(); return }
+        requestAndroidPermissions(permissions.toList()) { grants ->
+            val ok = permissions.all { grants[it] == true || hasPermission(it) }
+            if (ok) callback.grant() else { callback.reject(); snack(getString(R.string.perm_denied)) }
         }
-        if (wanted.isEmpty()) { request.deny(); return }
-        val origin = request.origin.host ?: request.origin.toString()
-        val what = wanted.mapNotNull {
-            when (it) {
-                PermissionRequest.RESOURCE_VIDEO_CAPTURE -> getString(R.string.perm_camera)
-                PermissionRequest.RESOURCE_AUDIO_CAPTURE -> getString(R.string.perm_microphone)
-                PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID -> getString(R.string.perm_drm)
-                else -> null
+    }
+
+    /** Site permissions. Decisions returned as VALUE_ALLOW/VALUE_DENY are remembered by Gecko per origin *inside the session context*. */
+    override fun onContentPermissionRequest(tab: Tab, perm: ContentPermission): GeckoResult<Int> {
+        val host = UrlUtils.displayHost(perm.uri).ifBlank { perm.uri }
+        return when (perm.permission) {
+            ContentPermission.PERMISSION_GEOLOCATION -> askContentPermission(host, getString(R.string.perm_location_msg)) { allowed ->
+                if (!allowed) GeckoResult.fromValue(ContentPermission.VALUE_DENY)
+                else {
+                    val r = GeckoResult<Int>()
+                    requestAndroidPermissions(listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) { grants ->
+                        val ok = grants.values.any { it } || hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+                        r.complete(if (ok) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY)
+                    }
+                    r
+                }
             }
-        }.joinToString(", ")
-        AppLog.i(TAG, "Permission request from $origin: $what")
+            ContentPermission.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS -> askContentPermission(host, getString(R.string.perm_request_msg, getString(R.string.perm_drm))) { allowed ->
+                GeckoResult.fromValue(if (allowed) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY)
+            }
+            ContentPermission.PERMISSION_AUTOPLAY_INAUDIBLE -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
+            ContentPermission.PERMISSION_AUTOPLAY_AUDIBLE ->
+                GeckoResult.fromValue(if (Prefs.mediaAutoplay) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY)
+            ContentPermission.PERMISSION_PERSISTENT_STORAGE -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
+            ContentPermission.PERMISSION_STORAGE_ACCESS ->
+                GeckoResult.fromValue(if (Prefs.thirdPartyCookies) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY)
+            // Web notifications need a WebNotificationDelegate + notification channel (not implemented): be honest and deny.
+            ContentPermission.PERMISSION_DESKTOP_NOTIFICATION -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
+            else -> GeckoResult.fromValue(ContentPermission.VALUE_DENY) // XR, tracking, unknown
+        }
+    }
+
+    private fun askContentPermission(host: String, message: String, onDecision: (Boolean) -> GeckoResult<Int>): GeckoResult<Int> {
+        val result = GeckoResult<Int>()
+        var decided = false
+        fun decide(allowed: Boolean) {
+            if (decided) return
+            decided = true
+            onDecision(allowed).accept { v -> result.complete(v ?: ContentPermission.VALUE_DENY) }
+        }
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(host)
+            .setMessage(message)
+            .setPositiveButton(R.string.allow) { _, _ -> decide(true) }
+            .setNegativeButton(R.string.block) { _, _ -> decide(false) }
+            .setOnCancelListener { decide(false) }
+            .create()
+        dialog.setOnDismissListener { decide(false); if (activePermissionDialog === dialog) activePermissionDialog = null }
+        activePermissionDialog?.dismiss()
+        activePermissionDialog = dialog
+        dialog.show()
+        return result
+    }
+
+    /** getUserMedia (WebRTC voice/video, e.g. Discord calls): choose camera + microphone after user consent. */
+    override fun onMediaPermissionRequest(
+        tab: Tab,
+        uri: String,
+        video: Array<MediaSource>?,
+        audio: Array<MediaSource>?,
+        callback: GeckoSession.PermissionDelegate.MediaCallback,
+    ) {
+        val wantsVideo = !video.isNullOrEmpty()
+        val wantsAudio = !audio.isNullOrEmpty()
+        if (!wantsVideo && !wantsAudio) { callback.reject(); return }
+        if (video?.all { it.source == MediaSource.SOURCE_SCREEN } == true && !wantsAudio) {
+            callback.reject(); snack(getString(R.string.perm_screen_share_unsupported)); return
+        }
+        val camera = video?.firstOrNull { it.source == MediaSource.SOURCE_CAMERA && it.name?.contains("front", true) == true }
+            ?: video?.firstOrNull { it.source == MediaSource.SOURCE_CAMERA }
+            ?: video?.firstOrNull { it.source != MediaSource.SOURCE_SCREEN }
+        val microphone = audio?.firstOrNull { it.source == MediaSource.SOURCE_MICROPHONE } ?: audio?.firstOrNull()
+        val what = listOfNotNull(
+            if (camera != null) getString(R.string.perm_camera) else null,
+            if (microphone != null) getString(R.string.perm_microphone) else null,
+        ).joinToString(", ")
+        if (what.isEmpty()) { callback.reject(); return }
+        val origin = UrlUtils.displayHost(uri).ifBlank { uri }
+        AppLog.i(TAG, "Media permission request from $origin: $what")
+        var decided = false
         val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(origin)
             .setMessage(getString(R.string.perm_request_msg, what))
             .setPositiveButton(R.string.allow) { _, _ ->
+                decided = true
                 val androidPerms = buildList {
-                    if (PermissionRequest.RESOURCE_VIDEO_CAPTURE in wanted) add(Manifest.permission.CAMERA)
-                    if (PermissionRequest.RESOURCE_AUDIO_CAPTURE in wanted) add(Manifest.permission.RECORD_AUDIO)
+                    if (camera != null) add(Manifest.permission.CAMERA)
+                    if (microphone != null) add(Manifest.permission.RECORD_AUDIO)
                 }
                 requestAndroidPermissions(androidPerms) { grants ->
-                    val granted = wanted.filter { res ->
-                        when (res) {
-                            PermissionRequest.RESOURCE_VIDEO_CAPTURE -> grants[Manifest.permission.CAMERA] ?: hasPermission(Manifest.permission.CAMERA)
-                            PermissionRequest.RESOURCE_AUDIO_CAPTURE -> grants[Manifest.permission.RECORD_AUDIO] ?: hasPermission(Manifest.permission.RECORD_AUDIO)
-                            else -> true
-                        }
-                    }
-                    if (granted.isEmpty()) { request.deny(); snack(getString(R.string.perm_denied)) } else request.grant(granted.toTypedArray())
+                    val camOk = camera != null && (grants[Manifest.permission.CAMERA] ?: hasPermission(Manifest.permission.CAMERA))
+                    val micOk = microphone != null && (grants[Manifest.permission.RECORD_AUDIO] ?: hasPermission(Manifest.permission.RECORD_AUDIO))
+                    if (!camOk && !micOk) { callback.reject(); snack(getString(R.string.perm_denied)) }
+                    else callback.grant(if (camOk) camera else null, if (micOk) microphone else null)
                 }
             }
-            .setNegativeButton(R.string.block) { _, _ -> request.deny() }
-            .setOnCancelListener { request.deny() }
+            .setNegativeButton(R.string.block) { _, _ -> decided = true; callback.reject() }
             .create()
-        dialog.setOnDismissListener { if (activePermissionDialog?.first === request) activePermissionDialog = null }
-        activePermissionDialog = request to dialog
+        dialog.setOnDismissListener { if (!decided) { decided = true; callback.reject() }; if (activePermissionDialog === dialog) activePermissionDialog = null }
+        activePermissionDialog?.dismiss()
+        activePermissionDialog = dialog
         dialog.show()
-    }
-
-    override fun onPermissionRequestCanceled(request: PermissionRequest) {
-        activePermissionDialog?.let { (req, dlg) -> if (req === request) dlg.dismiss() }
-    }
-
-    override fun onGeolocationPrompt(tab: Tab, origin: String, callback: GeolocationPermissions.Callback) {
-        MaterialAlertDialogBuilder(this)
-            .setTitle(UrlUtils.displayHost(origin).ifBlank { origin })
-            .setMessage(R.string.perm_location_msg)
-            .setPositiveButton(R.string.allow) { _, _ ->
-                requestAndroidPermissions(listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) { grants ->
-                    val ok = grants.values.any { it } || hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
-                    callback.invoke(origin, ok, ok) // remembered per origin inside the session's profile
-                }
-            }
-            .setNegativeButton(R.string.block) { _, _ -> callback.invoke(origin, false, false) }
-            .setOnCancelListener { callback.invoke(origin, false, false) }
-            .show()
     }
 
     private fun hasPermission(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
@@ -811,78 +980,16 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
     private fun requestAndroidPermissions(perms: List<String>, onResult: (Map<String, Boolean>) -> Unit) {
         val missing = perms.filter { !hasPermission(it) }
         if (missing.isEmpty()) { onResult(perms.associateWith { true }); return }
+        pendingPermissionAction?.invoke(emptyMap())
         pendingPermissionAction = onResult
         permissionLauncher.launch(missing.toTypedArray())
     }
 
-    override fun onShowCustomView(view: View, callback: WebChromeClient.CustomViewCallback) {
-        if (customView != null) { callback.onCustomViewHidden(); return }
-        customView = view
-        customViewCallback = callback
-        fullscreenContainer.addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        fullscreenContainer.isVisible = true
-        browserRoot.isVisible = false
-        WindowInsetsControllerCompat(window, window.decorView).apply {
-            hide(WindowInsetsCompat.Type.systemBars())
-            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        }
-    }
-
-    override fun onHideCustomView() {
-        val v = customView ?: return
-        fullscreenContainer.removeView(v)
-        fullscreenContainer.isVisible = false
-        browserRoot.isVisible = true
-        customViewCallback?.onCustomViewHidden()
-        customView = null
-        customViewCallback = null
-        WindowInsetsControllerCompat(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
-    }
-
-    override fun onSslError(tab: Tab, handler: SslErrorHandler, error: SslError) {
-        val reason = when (error.primaryError) {
-            SslError.SSL_EXPIRED -> R.string.ssl_expired
-            SslError.SSL_IDMISMATCH -> R.string.ssl_mismatch
-            SslError.SSL_UNTRUSTED -> R.string.ssl_untrusted
-            SslError.SSL_NOTYETVALID -> R.string.ssl_notyet
-            else -> R.string.ssl_generic
-        }
-        val host = UrlUtils.displayHost(error.url)
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.ssl_title)
-            .setMessage(getString(R.string.ssl_message, host, getString(reason)))
-            .setPositiveButton(R.string.go_back) { _, _ ->
-                handler.cancel()
-                tab.error = PageError(WebViewClient.ERROR_FAILED_SSL_HANDSHAKE, getString(reason), error.url ?: tab.url)
-                tab.isLoading = false
-                core.tabs.notifyTabUpdated(tab)
-            }
-            .setNegativeButton(R.string.ssl_proceed) { _, _ -> handler.proceed() }
-            .setOnCancelListener { handler.cancel() }
-            .show()
-    }
-
-    override fun onHttpAuthRequest(tab: Tab, handler: HttpAuthHandler, host: String, realm: String) {
-        val view = LayoutInflater.from(this).inflate(R.layout.dialog_http_auth, null)
-        val user = view.findViewById<EditText>(R.id.authUser)
-        val pass = view.findViewById<EditText>(R.id.authPassword)
-        MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.auth_title, host))
-            .setMessage(realm)
-            .setView(view)
-            .setPositiveButton(R.string.sign_in) { _, _ -> handler.proceed(user.text.toString(), pass.text.toString()) }
-            .setNegativeButton(android.R.string.cancel) { _, _ -> handler.cancel() }
-            .setOnCancelListener { handler.cancel() }
-            .show()
-    }
+    // ---- navigation to other apps ---------------------------------------------------------------
 
     override fun onExternalScheme(tab: Tab, uri: Uri, hasGesture: Boolean): Boolean {
         val scheme = uri.scheme?.lowercase() ?: return true
-        when (scheme) {
-            "about", "data", "blob" -> return false          // let WebView handle
-            "javascript" -> return true                      // never execute injected javascript: URLs
-            "file" -> { snack(getString(R.string.file_urls_blocked)); return true }
-        }
+        if (scheme == "file") { snack(getString(R.string.file_urls_blocked)); return true }
         if (!Prefs.openExternalApps) { snack(getString(R.string.external_apps_disabled)); return true }
         if (!hasGesture) { AppLog.i(TAG, "Blocked non-gesture external navigation ($scheme)"); return true }
         val intent = try {
@@ -900,40 +1007,58 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
             startActivity(intent); true
         } catch (e: ActivityNotFoundException) {
             val fallback = intent.getStringExtra("browser_fallback_url")
-            if (fallback != null && UrlUtils.isWebUrl(fallback)) tab.webView?.loadUrl(fallback) else snack(getString(R.string.no_app_found))
+            if (fallback != null && UrlUtils.isWebUrl(fallback)) tab.geckoSession?.load(GeckoSession.Loader().uri(fallback))
+            else snack(getString(R.string.no_app_found))
             true
         }
     }
 
-    override fun onDownloadRequested(tab: Tab, url: String, userAgent: String?, contentDisposition: String?, mimeType: String?, contentLength: Long) {
-        val session = core.sessions.get(tab.sessionId) ?: return
-        val req = DownloadHandler.Request(url, userAgent, contentDisposition, mimeType, contentLength)
+    // ---- downloads -------------------------------------------------------------------------------
+
+    override fun onDownloadRequested(tab: Tab, response: WebResponse) {
+        val req = DownloadHandler.Request(response)
         // A popup tab that only triggered a download is useless afterwards: close it.
-        val emptyPopup = tab.openerTabId != null && tab.webView?.url.let { it.isNullOrBlank() || it == "about:blank" }
+        val emptyPopup = tab.openerTabId != null && (tab.url.isBlank() || tab.url == "about:blank" || tab.url == req.url)
+        if (response.requestExternalApp && Prefs.openExternalApps && UrlUtils.isWebUrl(req.url)) {
+            // Gecko asks for an external app (e.g. a scheme/type the user prefers to open elsewhere).
+            if (openExternal(req.url)) { core.downloads.cancel(req); if (emptyPopup) closeTab(tab); return }
+        }
         val start = {
             ensureStoragePermission { ok ->
-                if (!ok) { snack(getString(R.string.perm_storage_denied)); return@ensureStoragePermission }
-                core.downloads.enqueue(session, req)
-                    .onSuccess { snack(getString(R.string.downloading, it)) }
-                    .onFailure { e ->
-                        if (e is DownloadHandler.UnsupportedDownload && req.isBlob) {
-                            snack(getString(R.string.download_blob_unsupported))
-                        } else snack(getString(R.string.download_failed))
-                    }
+                if (!ok) { core.downloads.cancel(req); snack(getString(R.string.perm_storage_denied)); return@ensureStoragePermission }
+                snack(getString(R.string.downloading, req.fileName))
+                core.downloads.start(req) { result ->
+                    result.onSuccess { snack(getString(R.string.download_complete, it)) }
+                        .onFailure { snack(getString(R.string.download_failed)) }
+                }
             }
         }
-        if (req.isBlob) { snack(getString(R.string.download_blob_unsupported)); return }
         if (Prefs.askBeforeDownload) {
-            val size = if (contentLength > 0) Formatter.formatFileSize(this, contentLength) else getString(R.string.unknown_size)
+            val size = if (req.contentLength > 0) Formatter.formatFileSize(this, req.contentLength) else getString(R.string.unknown_size)
             MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.download_title)
-                .setMessage(getString(R.string.download_message, req.fileName, size, UrlUtils.displayHost(url)))
+                .setMessage(getString(R.string.download_message, req.fileName, size, UrlUtils.displayHost(req.url)))
                 .setPositiveButton(R.string.download) { _, _ -> start() }
-                .setNeutralButton(R.string.open_external) { _, _ -> openExternal(url) }
-                .setNegativeButton(android.R.string.cancel, null)
+                .setNeutralButton(R.string.open_external) { _, _ -> core.downloads.cancel(req); openExternal(req.url) }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> core.downloads.cancel(req) }
+                .setOnCancelListener { core.downloads.cancel(req) }
                 .show()
         } else start()
         if (emptyPopup) closeTab(tab)
+    }
+
+    /** Fetches [url] through Gecko's network stack (no session cookies) and saves it - used for "download image". */
+    private fun downloadUrl(url: String) {
+        if (!UrlUtils.isWebUrl(url)) { snack(getString(R.string.download_failed)); return }
+        try {
+            GeckoWebExecutor(core.engine.runtime).fetch(WebRequest.Builder(url).build())
+                .accept({ response ->
+                    if (response == null) { snack(getString(R.string.download_failed)); return@accept }
+                    onDownloadRequested(currentTab ?: return@accept, response)
+                }, { AppLog.w(TAG, "fetch failed", it); snack(getString(R.string.download_failed)) })
+        } catch (t: Throwable) {
+            AppLog.w(TAG, "fetch failed", t); snack(getString(R.string.download_failed))
+        }
     }
 
     private fun ensureStoragePermission(onResult: (Boolean) -> Unit) {
@@ -941,63 +1066,48 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         requestAndroidPermissions(listOf(Manifest.permission.WRITE_EXTERNAL_STORAGE)) { onResult(it[Manifest.permission.WRITE_EXTERNAL_STORAGE] == true) }
     }
 
-    override fun onLinkLongPressed(tab: Tab, webView: WebView): Boolean {
-        val result = webView.hitTestResult
-        return when (result.type) {
-            WebView.HitTestResult.SRC_ANCHOR_TYPE, WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
-                val handler = Handler(Looper.getMainLooper()) { msg ->
-                    val link = msg.data.getString("url")
-                    val src = msg.data.getString("src")
-                    showLinkMenu(tab, link ?: src, src); true
-                }
-                webView.requestFocusNodeHref(handler.obtainMessage()); true
-            }
-            WebView.HitTestResult.IMAGE_TYPE -> { showLinkMenu(tab, null, result.extra); true }
-            else -> false
-        }
-    }
+    // ---- link / image context menu -----------------------------------------------------------------
 
-    private fun showLinkMenu(tab: Tab, link: String?, image: String?) {
-        val target = link ?: image ?: return
+    override fun onContextMenu(tab: Tab, element: GeckoSession.ContentDelegate.ContextElement) {
+        val link = element.linkUri
+        val src = element.srcUri
+        val isImage = element.type == GeckoSession.ContentDelegate.ContextElement.TYPE_IMAGE
+        val isMedia = element.type == GeckoSession.ContentDelegate.ContextElement.TYPE_VIDEO || element.type == GeckoSession.ContentDelegate.ContextElement.TYPE_AUDIO
+        val target = link ?: src ?: return
         val items = mutableListOf<Pair<String, () -> Unit>>()
         if (link != null) {
             items += getString(R.string.open_in_new_tab) to { core.tabs.createTab(tab.sessionId, link, select = false, openerTabId = tab.id); updateTabCount(); snack(getString(R.string.tab_opened_background)) }
             items += getString(R.string.copy_link) to { copyToClipboard(link) }
-            items += getString(R.string.share_link) to { shareUrl(link, "") }
+            items += getString(R.string.share_link) to { shareUrl(link, element.title ?: "") }
         }
-        if (image != null) {
-            items += getString(R.string.open_image_new_tab) to { core.tabs.createTab(tab.sessionId, image, select = false, openerTabId = tab.id); updateTabCount() }
-            items += getString(R.string.download_image) to { onDownloadRequested(tab, image, tab.webView?.settings?.userAgentString, null, null, -1) }
+        if (src != null && (isImage || isMedia)) {
+            items += getString(R.string.open_image_new_tab) to { core.tabs.createTab(tab.sessionId, src, select = false, openerTabId = tab.id); updateTabCount() }
+            items += getString(R.string.download_image) to { downloadUrl(src) }
+            if (link == null) items += getString(R.string.copy_link) to { copyToClipboard(src) }
         }
         items += getString(R.string.open_external) to { openExternal(target) }
         MaterialAlertDialogBuilder(this)
-            .setTitle(UrlUtils.displayHost(target).ifBlank { target })
+            .setTitle(element.title?.takeIf { it.isNotBlank() } ?: UrlUtils.displayHost(target).ifBlank { target })
             .setItems(items.map { it.first }.toTypedArray()) { _, i -> items[i].second() }
             .show()
     }
 
-    override fun onRenderProcessGone(tab: Tab) {
-        if (tab.id == currentTabId) {
-            webContainer.removeAllViews()
-            updateErrorPage(tab)
-            updateToolbar(tab)
-        }
-    }
-
     // ================================================================== helpers
 
+    /** Async screenshot of the displayed session for the tab grid (GeckoView cannot be drawn to a Canvas). */
     private fun captureThumbnail(tab: Tab) {
-        val wv = tab.webView ?: return
-        if (wv.width <= 0 || wv.height <= 0 || wv.parent == null) return
+        val gv = geckoView ?: return
+        val gs = tab.geckoSession ?: return
+        if (gv.session !== gs || gv.parent == null || !gv.isVisible || gv.width <= 0 || gv.height <= 0) return
         try {
-            val scale = 0.33f
-            val bmp = Bitmap.createBitmap((wv.width * scale).toInt().coerceAtLeast(1), (wv.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.RGB_565)
-            val canvas = Canvas(bmp)
-            canvas.scale(scale, scale)
-            wv.draw(canvas)
-            tab.thumbnail = bmp
+            gv.capturePixels().accept({ bmp ->
+                if (bmp == null) return@accept
+                val scale = 0.33f
+                tab.thumbnail = Bitmap.createScaledBitmap(bmp, (bmp.width * scale).toInt().coerceAtLeast(1), (bmp.height * scale).toInt().coerceAtLeast(1), true)
+                if (tab.thumbnail !== bmp) bmp.recycle()
+            }, { AppLog.d(TAG, "thumbnail failed: ${it.message}") })
         } catch (t: Throwable) {
-            AppLog.w(TAG, "thumbnail failed", t)
+            AppLog.d(TAG, "thumbnail not available: ${t.message}")
         }
     }
 
