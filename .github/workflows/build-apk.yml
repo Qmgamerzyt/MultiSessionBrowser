@@ -38,7 +38,9 @@ jobs:
 
       - name: Install SDK platform + build-tools
         # compileSdk 37 (required by GeckoView 155's androidx.core 1.19); build-tools 36.0.0 is AGP 9.2's default.
-        run: sdkmanager "platforms;android-37" "build-tools;36.0.0" "platform-tools"
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager "platforms;android-37" "build-tools;36.0.0" "platform-tools"
 
       - name: Set up Gradle 9.4.1
         uses: gradle/actions/setup-gradle@v6
