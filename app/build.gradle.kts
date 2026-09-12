@@ -3,7 +3,6 @@ import com.android.build.api.variant.FilterConfiguration
 plugins {
     id("com.android.application")   // AGP 9: Kotlin is compiled by the built-in Kotlin support (no kotlin-android plugin)
     id("com.google.devtools.ksp")
-    id("org.jetbrains.kotlin.android") version "2.3.12"   // Override AGP's built-in Kotlin 2.2.0 so KSP 2.3.12 metadata compiles
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -70,6 +69,9 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
         // Built-in Kotlin aligns its jvmTarget with targetCompatibility automatically.
+    }
+    kotlinOptions {
+        freeCompilerArgs += listOf("-Xskip-metadata-version-check")
     }
     buildFeatures {
         buildConfig = true
