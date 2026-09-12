@@ -3,6 +3,7 @@ import com.android.build.api.variant.FilterConfiguration
 plugins {
     id("com.android.application")   // AGP 9: Kotlin is compiled by the built-in Kotlin support (no kotlin-android plugin)
     id("com.google.devtools.ksp")
+    id("org.jetbrains.kotlin.android") version "2.3.12"   // Override AGP's built-in Kotlin 2.2.0 so KSP 2.3.12 metadata compiles
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -17,7 +18,6 @@ val geckoViewVersion = "155.0.20260903215306"
 android {
     namespace = "app.multisession.browser"
     compileSdk = 37                 // GeckoView 155's androidx.core 1.19 requires >= API 36.1; Mozilla builds against 37
-    compileSdkExtension = 1         // GeckoView 155 AAR metadata requires 37.1+
 
     defaultConfig {
         applicationId = "app.multisession.browser"
