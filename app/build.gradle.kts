@@ -70,9 +70,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
         // Built-in Kotlin aligns its jvmTarget with targetCompatibility automatically.
     }
-    kotlinOptions {
-        freeCompilerArgs += listOf("-Xskip-metadata-version-check")
-    }
     buildFeatures {
         buildConfig = true
     }
