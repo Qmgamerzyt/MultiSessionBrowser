@@ -11,43 +11,35 @@ permissions:
   contents: write
 
 env:
-  # Optional release signing. Add these repository secrets to sign with your own key:
-  #   KEYSTORE_BASE64  (base64 of your .jks)  KEYSTORE_PASSWORD  KEY_ALIAS  KEY_PASSWORD
-  # Without them the release APK is signed with the debug key (still installable).
   KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
 
 jobs:
   build:
     name: Build debug + release APK (GeckoView, arm64-v8a + armeabi-v7a)
     runs-on: ubuntu-latest
-    # First uncached run downloads the 230 MB GeckoView AAR and merges ~600 MB of native libs.
     timeout-minutes: 60
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses || true
 
       - name: Install SDK platform + build-tools
-        # compileSdk 37 (required by GeckoView 155's androidx.core 1.19); build-tools 36.0.0 is AGP 9.2's default.
-        env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
-        run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          ls $ANDROID_HOME/cmdline-tools/latest/bin/ 2>/dev/null || echo "no cmdline-tools"
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-37" "build-tools;36.0.0" "platform-tools"
+        run: sdkmanager "platforms;android-37" "build-tools;36.0.0" "platform-tools"
 
-      - name: Set up Gradle 9.4.1
-        uses: gradle/actions/setup-gradle@v6
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.4.1'
           cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
@@ -56,7 +48,7 @@ jobs:
         run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload debug APKs
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: MultiSessionBrowser-debug
           path: app/build/outputs/apk/debug/*.apk
@@ -76,16 +68,15 @@ jobs:
         run: gradle assembleRelease --no-daemon --stacktrace
 
       - name: Upload release APKs
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: MultiSessionBrowser-release
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
-      - name: Attach APKs to GitHub Release (tags only)
+      - name: Attach APK to GitHub Release (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         with:
           files: |
-            app/build/outputs/apk/debug/*.apk
             app/build/outputs/apk/release/*.apk
