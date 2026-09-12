@@ -16,7 +16,7 @@ val geckoViewVersion = "155.0.20260903215306"
 
 android {
     namespace = "app.multisession.browser"
-    compileSdkPreview = "Baklava"     // GeckoView 155's androidx.core 1.19 requires >= API 36.1; Mozilla builds against 37 (Baklava preview)
+    compileSdk = 36                  // GeckoView 155's androidx.core 1.19 requires >= API 36
 
     defaultConfig {
         applicationId = "app.multisession.browser"
