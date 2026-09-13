@@ -23,7 +23,7 @@ implementation("org.mozilla.geckoview:geckoview:$geckoViewVersion")
    the AGP version), `androidx.core` (dictates the minimum `compileSdk`), `lifecycle`, `media3`.
 3. Change `geckoViewVersion`; if step 2 demands it, raise `compileSdk`, AGP (`build.gradle.kts`),
    Gradle (`gradle/wrapper/gradle-wrapper.properties` **and** `.github/workflows/build-apk.yml`
-   `gradle-version`), and the SDK platform installed by the workflow (`platforms;android-XX`).
+   `gradle-version`), and the SDK platform installed by the workflow (`platforms;android-XX.Y` — API 37+ platforms are minor-versioned, so keep `compileSdkMinor` in sync). Also check the new GeckoView POM's `kotlin-stdlib` version: the KGP version pinned in the root `buildscript {}` block must be >= that minor version.
 4. Push; the **Build APK** workflow must go green. GeckoView API changes surface as Kotlin compile
    errors in `app/src/main/java/app/multisession/browser/engine/`.
 
@@ -33,9 +33,10 @@ implementation("org.mozilla.geckoview:geckoview:$geckoViewVersion")
 |---|---|---|
 | Gradle | 9.4.1 | `gradle/wrapper/gradle-wrapper.properties`, workflow |
 | Android Gradle Plugin | 9.2.1 (built-in Kotlin, no `kotlin-android` plugin) | `build.gradle.kts` |
+| Kotlin compiler used by built-in Kotlin | 2.4.20 (`buildscript { classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.20") }` — AGP 9.2.1 alone would use 2.2.10, which cannot read GeckoView's Kotlin 2.4 metadata) | `build.gradle.kts` |
 | KSP | 2.3.12 | `build.gradle.kts` |
 | Room | 2.8.5 | `app/build.gradle.kts` |
-| compileSdk / targetSdk / minSdk | 37 / 35 / 28 | `app/build.gradle.kts` |
+| compileSdk / targetSdk / minSdk | 37.1 (`compileSdk = 37` + `compileSdkMinor = 1`; SDK package `platforms;android-37.1`) / 35 / 28 | `app/build.gradle.kts` |
 | JDK | 17 | workflow |
 | GeckoView | 155.0.20260903215306 | `app/build.gradle.kts` |
 

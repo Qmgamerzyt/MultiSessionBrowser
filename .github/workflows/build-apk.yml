@@ -36,18 +36,15 @@ jobs:
         run: yes | sdkmanager --licenses || true
 
       - name: Install SDK platforms + build-tools
+        # compileSdk 37 / compileSdkMinor 1 -> API 37 exists only as minor-versioned platforms
+        # ("platforms;android-37.0", "platforms;android-37.1"; there is NO "platforms;android-37").
+        # Both are stable-channel packages in Google's SDK repository (repository2-3.xml).
+        run: sdkmanager "platforms;android-37.1" "build-tools;36.0.0" "platform-tools"
+
+      - name: Print resolved toolchain (diagnostics)
         run: |
-          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
-          # Install Baklava preview SDK for compileSdk 37
-          sdkmanager --channel=3 "platforms;android-Baklava" || {
-            echo "Preview SDK not available, downloading manually..."
-            curl -sSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -o /tmp/cmdline-tools.zip
-            mkdir -p "$ANDROID_HOME/cmdline-tools-new"
-            unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools-new"
-            mv "$ANDROID_HOME/cmdline-tools-new/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
-            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
-            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-Baklava" || echo "WARNING: Baklava preview SDK unavailable"
-          }
+          java -version
+          ls "$ANDROID_HOME/platforms"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4

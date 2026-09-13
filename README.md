@@ -34,12 +34,12 @@ APKs: `app/build/outputs/apk/debug/app-arm64-v8a-debug.apk` and `app-armeabi-v7a
 ## Toolchain (versions verified together)
 | Component | Version |
 |---|---|
-| Android Gradle Plugin | 9.2.1 (built-in Kotlin) |
+| Android Gradle Plugin | 9.2.1 (built-in Kotlin, compiler = Kotlin Gradle plugin 2.4.20 via buildscript classpath) |
 | Gradle | 9.4.1 |
 | KSP / Room | 2.3.12 / 2.8.5 |
 | GeckoView | 155.0.20260903215306 (`app/build.gradle.kts` → `geckoViewVersion`) |
 | JDK | 17 |
-| compileSdk / targetSdk / minSdk | 37 / 35 / 28 (Android 9) |
+| compileSdk / targetSdk / minSdk | 37.1 (`compileSdk = 37`, `compileSdkMinor = 1`) / 35 / 28 (Android 9) |
 
 ## Features
 - Sessions: create, rename, colour, private sessions, duplicate (tabs only – never cookies), reset data, delete.

@@ -16,7 +16,13 @@ val geckoViewVersion = "155.0.20260903215306"
 
 android {
     namespace = "app.multisession.browser"
-    compileSdk = 37                 // GeckoView 155's androidx.core 1.19 requires >= API 36.1; Mozilla builds against 37
+    // GeckoView 155's androidx.core 1.19 requires >= API 36.1; Mozilla builds GeckoView 155 against 37.1.
+    // API 37 is published ONLY as minor-versioned SDK platforms ("platforms;android-37.0" / "android-37.1");
+    // without compileSdkMinor AGP looks for a plain "android-37" and fails with
+    // "Failed to find target with hash string 'android-37'". compileSdkMinor needs AGP >= 9.1.
+    // The CI workflow installs "platforms;android-37.1" to match.
+    compileSdk = 37
+    compileSdkMinor = 1
 
     defaultConfig {
         applicationId = "app.multisession.browser"
