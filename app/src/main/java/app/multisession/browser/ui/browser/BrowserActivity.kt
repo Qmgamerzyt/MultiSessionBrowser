@@ -1081,7 +1081,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
                 val scale = 0.33f
                 tab.thumbnail = Bitmap.createScaledBitmap(bmp, (bmp.width * scale).toInt().coerceAtLeast(1), (bmp.height * scale).toInt().coerceAtLeast(1), true)
                 if (tab.thumbnail !== bmp) bmp.recycle()
-            }, { AppLog.d(TAG, "thumbnail failed: ${it.message}") })
+            }, { AppLog.d(TAG, "thumbnail failed: ${it?.message}") })
         } catch (t: Throwable) {
             AppLog.d(TAG, "thumbnail not available: ${t.message}")
         }
