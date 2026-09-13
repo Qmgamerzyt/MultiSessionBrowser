@@ -877,7 +877,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
     override fun onContentPermissionRequest(tab: Tab, perm: ContentPermission): GeckoResult<Int> {
         val host = UrlUtils.displayHost(perm.uri).ifBlank { perm.uri }
         return when (perm.permission) {
-            ContentPermission.PERMISSION_GEOLOCATION -> askContentPermission(host, getString(R.string.perm_location_msg)) { allowed ->
+            "geolocation" -> askContentPermission(host, getString(R.string.perm_location_msg)) { allowed ->
                 if (!allowed) GeckoResult.fromValue(ContentPermission.VALUE_DENY)
                 else {
                     val r = GeckoResult<Int>()
@@ -888,17 +888,17 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
                     r
                 }
             }
-            ContentPermission.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS -> askContentPermission(host, getString(R.string.perm_request_msg, getString(R.string.perm_drm))) { allowed ->
+            "media-key-system-access" -> askContentPermission(host, getString(R.string.perm_request_msg, getString(R.string.perm_drm))) { allowed ->
                 GeckoResult.fromValue(if (allowed) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY)
             }
-            ContentPermission.PERMISSION_AUTOPLAY_INAUDIBLE -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
-            ContentPermission.PERMISSION_AUTOPLAY_AUDIBLE ->
+            "autoplay-media-inaudible" -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
+            "autoplay-media-audible" ->
                 GeckoResult.fromValue(if (Prefs.mediaAutoplay) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY)
-            ContentPermission.PERMISSION_PERSISTENT_STORAGE -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
-            ContentPermission.PERMISSION_STORAGE_ACCESS ->
+            "persistent-storage" -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
+            "storage-access" ->
                 GeckoResult.fromValue(if (Prefs.thirdPartyCookies) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY)
             // Web notifications need a WebNotificationDelegate + notification channel (not implemented): be honest and deny.
-            ContentPermission.PERMISSION_DESKTOP_NOTIFICATION -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
+            "desktop-notification" -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
             else -> GeckoResult.fromValue(ContentPermission.VALUE_DENY) // XR, tracking, unknown
         }
     }
