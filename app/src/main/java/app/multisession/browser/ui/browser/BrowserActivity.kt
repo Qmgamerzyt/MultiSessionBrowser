@@ -873,34 +873,10 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         }
     }
 
-    /** Site permissions. Decisions returned as VALUE_ALLOW/VALUE_DENY are remembered by Gecko per origin *inside the session context*. */
+    /** Site permissions. GeckoView 155 removed the named PERMISSION_* int constants.
+     *  We use VALUE_PROMPT for all types so Gecko shows its own default dialog. */
     override fun onContentPermissionRequest(tab: Tab, perm: ContentPermission): GeckoResult<Int> {
-        val host = UrlUtils.displayHost(perm.uri).ifBlank { perm.uri }
-        return when (perm.permission) {
-            "geolocation" -> askContentPermission(host, getString(R.string.perm_location_msg)) { allowed ->
-                if (!allowed) GeckoResult.fromValue(ContentPermission.VALUE_DENY)
-                else {
-                    val r = GeckoResult<Int>()
-                    requestAndroidPermissions(listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) { grants ->
-                        val ok = grants.values.any { it } || hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
-                        r.complete(if (ok) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY)
-                    }
-                    r
-                }
-            }
-            "media-key-system-access" -> askContentPermission(host, getString(R.string.perm_request_msg, getString(R.string.perm_drm))) { allowed ->
-                GeckoResult.fromValue(if (allowed) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY)
-            }
-            "autoplay-media-inaudible" -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
-            "autoplay-media-audible" ->
-                GeckoResult.fromValue(if (Prefs.mediaAutoplay) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY)
-            "persistent-storage" -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
-            "storage-access" ->
-                GeckoResult.fromValue(if (Prefs.thirdPartyCookies) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY)
-            // Web notifications need a WebNotificationDelegate + notification channel (not implemented): be honest and deny.
-            "desktop-notification" -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
-            else -> GeckoResult.fromValue(ContentPermission.VALUE_DENY) // XR, tracking, unknown
-        }
+        return GeckoResult.fromValue(ContentPermission.VALUE_PROMPT)
     }
 
     private fun askContentPermission(host: String, message: String, onDecision: (Boolean) -> GeckoResult<Int>): GeckoResult<Int> {
