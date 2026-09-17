@@ -12,6 +12,7 @@ permissions:
 
 env:
   KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+  ANDROID_HOME: /usr/local/lib/android/sdk
 
 jobs:
   build:
@@ -29,17 +30,15 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Accept SDK licenses
-        run: yes | sdkmanager --licenses || true
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
 
       - name: Install SDK platforms + build-tools
         # compileSdk 37 / compileSdkMinor 1 -> API 37 exists only as minor-versioned platforms
         # ("platforms;android-37.0", "platforms;android-37.1"; there is NO "platforms;android-37").
         # Both are stable-channel packages in Google's SDK repository (repository2-3.xml).
-        run: sdkmanager "platforms;android-37.1" "build-tools;36.0.0" "platform-tools"
+        run: "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.1" "build-tools;36.0.0" "platform-tools"
 
       - name: Print resolved toolchain (diagnostics)
         run: |
