@@ -12,7 +12,6 @@ permissions:
 
 env:
   KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-  ANDROID_HOME: /usr/local/lib/android/sdk
 
 jobs:
   build:
@@ -30,11 +29,18 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        continue-on-error: true
+
       - name: Accept SDK licenses
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+        run: |
+          yes | (sdkmanager --licenses 2>/dev/null || "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses 2>/dev/null || true)
 
       - name: Install SDK platforms + build-tools
-        run: "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.1" "build-tools;36.0.0" "platform-tools"
+        run: |
+          sdkmanager "platforms;android-37.1" "build-tools;36.0.0" "platform-tools" 2>/dev/null || \
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.1" "build-tools;36.0.0" "platform-tools"
 
       - name: Print resolved toolchain (diagnostics)
         run: |
