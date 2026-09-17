@@ -29,6 +29,29 @@ class SessionsDrawer(private val activity: BrowserActivity, private val core: Br
     private val recycler: RecyclerView = root.findViewById(R.id.sessionsRecycler)
     private val adapter = Adapter()
 
+    private val touchHelper = ItemTouchHelper(object : ItemTouchHelper.Callback() {
+        override fun getMovementFlags(rv: RecyclerView, vh: RecyclerView.ViewHolder): Int {
+            val s = adapter.items.getOrNull(vh.bindingAdapterPosition) ?: return 0
+            return if (s.isDefault) 0 else makeMovementFlags(ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0)
+        }
+        override fun isLongPressDragEnabled() = true
+        override fun onMove(rv: RecyclerView, from: RecyclerView.ViewHolder, to: RecyclerView.ViewHolder): Boolean {
+            val f = from.bindingAdapterPosition; val t = to.bindingAdapterPosition
+            if (f == RecyclerView.NO_POSITION || t == RecyclerView.NO_POSITION) return false
+            if (adapter.items.getOrNull(t)?.isDefault == true) return false
+            adapter.move(f, t); return true
+        }
+        override fun onSwiped(vh: RecyclerView.ViewHolder, direction: Int) {}
+        override fun clearView(rv: RecyclerView, vh: RecyclerView.ViewHolder) {
+            super.clearView(rv, vh)
+            if (adapter.dirty) {
+                adapter.dirty = false
+                val ids = adapter.items.map { it.id }
+                activity.lifecycleScope.launch { core.sessions.reorder(ids); refresh() }
+            }
+        }
+    })
+
     init {
         root.findViewById<TextView>(R.id.isolationStatus).text = core.isolation.describe(activity)
         recycler.layoutManager = LinearLayoutManager(activity)
@@ -110,29 +133,6 @@ class SessionsDrawer(private val activity: BrowserActivity, private val core: Br
             .setNegativeButton(android.R.string.cancel, null)
             .show()
     }
-
-    private val touchHelper = ItemTouchHelper(object : ItemTouchHelper.Callback() {
-        override fun getMovementFlags(rv: RecyclerView, vh: RecyclerView.ViewHolder): Int {
-            val s = adapter.items.getOrNull(vh.bindingAdapterPosition) ?: return 0
-            return if (s.isDefault) 0 else makeMovementFlags(ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0)
-        }
-        override fun isLongPressDragEnabled() = true
-        override fun onMove(rv: RecyclerView, from: RecyclerView.ViewHolder, to: RecyclerView.ViewHolder): Boolean {
-            val f = from.bindingAdapterPosition; val t = to.bindingAdapterPosition
-            if (f == RecyclerView.NO_POSITION || t == RecyclerView.NO_POSITION) return false
-            if (adapter.items.getOrNull(t)?.isDefault == true) return false   // never above the default session
-            adapter.move(f, t); return true
-        }
-        override fun onSwiped(vh: RecyclerView.ViewHolder, direction: Int) {}
-        override fun clearView(rv: RecyclerView, vh: RecyclerView.ViewHolder) {
-            super.clearView(rv, vh)
-            if (adapter.dirty) {
-                adapter.dirty = false
-                val ids = adapter.items.map { it.id }
-                activity.lifecycleScope.launch { core.sessions.reorder(ids); refresh() }
-            }
-        }
-    })
 
     private inner class Adapter : RecyclerView.Adapter<Adapter.VH>() {
         val items = mutableListOf<SessionEntity>()
