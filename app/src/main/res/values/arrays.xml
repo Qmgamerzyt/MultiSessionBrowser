@@ -44,4 +44,9 @@
         <item>10</item>
         <item>15</item>
     </string-array>
+    <string-array name="perm_states">
+        <item>Allow</item>
+        <item>Block</item>
+        <item>Ask</item>
+    </string-array>
 </resources>

@@ -26,6 +26,9 @@ object Prefs {
     const val KEY_OPEN_EXTERNAL_APPS = "open_external_apps"
     const val KEY_LIVE_TAB_LIMIT = "live_tab_limit"
     const val KEY_ACTIVE_SESSION = "active_session_id"
+    const val KEY_HUD_VISIBLE = "hud_visible"
+    const val KEY_HUD_ITEMS = "hud_items"
+    const val KEY_WEBRTC_COMPAT = "webrtc_compat"
 
     private const val DDG = "https://duckduckgo.com/?q=%s"
 
@@ -57,6 +60,8 @@ object Prefs {
     val zoomEnabled: Boolean get() = sp.getBoolean(KEY_ZOOM, true)
     val safeBrowsing: Boolean get() = sp.getBoolean(KEY_SAFE_BROWSING, true)
     val openExternalApps: Boolean get() = sp.getBoolean(KEY_OPEN_EXTERNAL_APPS, true)
+    /** WebRTC device compatibility prefs for Gecko (audio output enumeration / full-duplex audio). Default on. */
+    val webrtcCompat: Boolean get() = sp.getBoolean(KEY_WEBRTC_COMPAT, true)
 
     /** Maximum number of open GeckoSessions kept at once (active tab included). */
     val liveTabLimit: Int
@@ -65,6 +70,17 @@ object Prefs {
     var activeSessionId: String?
         get() = sp.getString(KEY_ACTIVE_SESSION, null)
         set(value) = sp.edit().putString(KEY_ACTIVE_SESSION, value).apply()
+
+    var hudVisible: Boolean
+        get() = sp.getBoolean(KEY_HUD_VISIBLE, false)
+        set(value) = sp.edit().putBoolean(KEY_HUD_VISIBLE, value).apply()
+
+    /** Comma separated HUD item keys in display order (see ui.browser.HudController). */
+    var hudItems: List<String>
+        get() = (sp.getString(KEY_HUD_ITEMS, null) ?: DEFAULT_HUD).split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        set(value) = sp.edit().putString(KEY_HUD_ITEMS, value.joinToString(",")).apply()
+
+    const val DEFAULT_HUD = "back,forward,reload,top,bottom,desktop,fullscreen"
 
     fun nightMode(): Int = when (sp.getString(KEY_THEME, "system")) {
         "light" -> AppCompatDelegate.MODE_NIGHT_NO

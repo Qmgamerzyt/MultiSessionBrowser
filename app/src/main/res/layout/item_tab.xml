@@ -1,83 +1,80 @@
 <?xml version="1.0" encoding="utf-8"?>
-<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/tabRow"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:layout_margin="6dp"
-    android:clickable="true"
-    android:focusable="true"
-    app:cardCornerRadius="14dp"
-    app:strokeColor="?attr/colorPrimary"
-    app:strokeWidth="0dp">
-
+    android:layout_height="64dp"
+    android:background="?attr/selectableItemBackground"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingStart="8dp"
+    android:paddingEnd="4dp">
+    <ImageView
+        android:id="@+id/tabDrag"
+        android:layout_width="28dp"
+        android:layout_height="28dp"
+        android:contentDescription="@string/drag_to_reorder"
+        android:padding="4dp"
+        android:src="@drawable/ic_drag_handle"
+        app:tint="?attr/colorOnSurfaceVariant" />
+    <View
+        android:id="@+id/tabGroupBar"
+        android:layout_width="3dp"
+        android:layout_height="match_parent"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="8dp"
+        android:visibility="invisible" />
+    <ImageView
+        android:id="@+id/tabThumbnail"
+        android:layout_width="56dp"
+        android:layout_height="44dp"
+        android:layout_marginStart="8dp"
+        android:background="?attr/colorSurfaceContainerHigh"
+        android:contentDescription="@null"
+        android:scaleType="centerCrop" />
     <LinearLayout
-        android:layout_width="match_parent"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_weight="1"
         android:orientation="vertical">
-
-        <LinearLayout
+        <TextView
+            android:id="@+id/tabTitle"
             android:layout_width="match_parent"
-            android:layout_height="40dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingStart="10dp">
-
-            <ImageView
-                android:id="@+id/tabFavicon"
-                android:layout_width="16dp"
-                android:layout_height="16dp"
-                android:contentDescription="@null" />
-
-            <TextView
-                android:id="@+id/tabTitle"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:layout_weight="1"
-                android:ellipsize="end"
-                android:singleLine="true"
-                android:textAppearance="?attr/textAppearanceLabelLarge" />
-
-            <ImageButton
-                android:id="@+id/tabClose"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:contentDescription="@string/close_tab"
-                android:src="@drawable/ic_close"
-                app:tint="?attr/colorOnSurfaceVariant" />
-        </LinearLayout>
-
-        <FrameLayout
-            android:layout_width="match_parent"
-            android:layout_height="130dp">
-
-            <ImageView
-                android:id="@+id/tabThumbnail"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:background="?attr/colorSurfaceVariant"
-                android:contentDescription="@null"
-                android:scaleType="centerCrop" />
-
-            <View
-                android:id="@+id/tabLive"
-                android:layout_width="8dp"
-                android:layout_height="8dp"
-                android:layout_gravity="top|end"
-                android:layout_margin="8dp"
-                android:background="@drawable/bg_dot"
-                android:backgroundTint="@color/live_badge" />
-        </FrameLayout>
-
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textAppearance="?attr/textAppearanceBodyMedium" />
         <TextView
             android:id="@+id/tabUrl"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:ellipsize="end"
-            android:padding="10dp"
             android:singleLine="true"
-            android:textAppearance="?attr/textAppearanceBodySmall"
-            android:textColor="?attr/colorOnSurfaceVariant" />
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:textSize="11sp" />
     </LinearLayout>
-</com.google.android.material.card.MaterialCardView>
+    <View
+        android:id="@+id/tabLive"
+        android:layout_width="6dp"
+        android:layout_height="6dp"
+        android:layout_marginEnd="6dp"
+        android:background="@drawable/bg_dot"
+        android:backgroundTint="?attr/colorPrimary" />
+    <ImageButton
+        android:id="@+id/tabMore"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/more_options"
+        android:src="@drawable/ic_more_vert"
+        app:tint="?attr/colorOnSurfaceVariant" />
+    <ImageButton
+        android:id="@+id/tabClose"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/close_tab"
+        android:src="@drawable/ic_close"
+        app:tint="?attr/colorOnSurfaceVariant" />
+</LinearLayout>

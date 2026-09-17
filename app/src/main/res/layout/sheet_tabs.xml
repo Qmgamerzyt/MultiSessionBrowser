@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
+    android:layout_height="wrap_content"
     android:orientation="vertical"
     android:paddingTop="8dp">
-
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -12,67 +12,51 @@
         android:orientation="horizontal"
         android:paddingStart="16dp"
         android:paddingEnd="8dp">
-
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:orientation="vertical">
-
             <TextView
                 android:id="@+id/sheetTitle"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textAppearance="?attr/textAppearanceTitleLarge" />
-
+                android:text="@string/tabs"
+                android:textAppearance="?attr/textAppearanceTitleMedium" />
             <TextView
                 android:id="@+id/sheetSubtitle"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textAppearance="?attr/textAppearanceBodyMedium"
-                android:textColor="?attr/colorOnSurfaceVariant" />
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="12sp" />
         </LinearLayout>
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/reopenButton"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/reopen_closed" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/closeAllButton"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/close_all" />
+        <ImageButton android:id="@+id/newGroupButton" style="@style/CompactBarButton" android:layout_width="40dp" android:layout_height="40dp" android:contentDescription="@string/new_group" android:src="@drawable/ic_label" />
+        <ImageButton android:id="@+id/reopenButton" style="@style/CompactBarButton" android:layout_width="40dp" android:layout_height="40dp" android:contentDescription="@string/reopen_closed" android:src="@drawable/ic_history" />
+        <ImageButton android:id="@+id/closeAllButton" style="@style/CompactBarButton" android:layout_width="40dp" android:layout_height="40dp" android:contentDescription="@string/close_all" android:src="@drawable/ic_delete" />
+        <ImageButton android:id="@+id/newTabButton" style="@style/CompactBarButton" android:layout_width="40dp" android:layout_height="40dp" android:contentDescription="@string/new_tab" android:src="@drawable/ic_add" />
     </LinearLayout>
-
-    <FrameLayout
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1">
-
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/tabsRecycler"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:clipToPadding="false"
-            android:padding="8dp" />
-
-        <TextView
-            android:id="@+id/emptyView"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:text="@string/no_tabs"
-            android:visibility="gone" />
-    </FrameLayout>
-
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/newTabButton"
+    <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_margin="16dp"
-        android:text="@string/new_tab" />
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="4dp"
+        android:text="@string/tabs_reorder_hint"
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:textSize="11sp" />
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/tabsRecycler"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:clipToPadding="false"
+        android:paddingBottom="16dp" />
+    <TextView
+        android:id="@+id/emptyView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:padding="24dp"
+        android:text="@string/no_tabs"
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:visibility="gone" />
 </LinearLayout>

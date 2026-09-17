@@ -3,6 +3,9 @@ package app.multisession.browser.engine
 import android.net.Uri
 import app.multisession.browser.core.AppLog
 import app.multisession.browser.core.BrowserCore
+import app.multisession.browser.permissions.PermissionValue
+import app.multisession.browser.permissions.SitePermissionStore
+import app.multisession.browser.permissions.SitePermissionType
 import app.multisession.browser.tabs.PageError
 import app.multisession.browser.tabs.Tab
 import org.mozilla.geckoview.AllowOrDeny
@@ -34,6 +37,7 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
     ) {
         // Also fires for pushState/replaceState navigations in SPAs and for redirects.
         val u = url ?: return
+        tab.sitePermissions = perms.toList()   // Gecko's stored permissions for this page (Site permissions dialog)
         if (u == "about:blank" && tab.awaitingDisplay) return   // popup placeholder, real URL follows
         tab.url = u
         core.tabs.notifyTabUpdated(tab)
@@ -54,9 +58,17 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
         val scheme = uri.substringBefore(':', "").lowercase()
         return when (scheme) {
             "http", "https", "about", "data", "blob", "resource", "moz-extension" -> {
+                if ((scheme == "http" || scheme == "https") && !request.isRedirect) applyDesktopSiteRule(uri)
                 if (scheme == "resource" && !uri.startsWith(LocalContentLoader.BUNDLED_BASE)) GeckoResult.deny() else GeckoResult.allow()
             }
-            "javascript" -> GeckoResult.deny()                                  // never execute injected javascript: URLs
+            "javascript" -> {
+                // Only the ONE javascript: load this app itself issued (bookmarklet / HUD command, see TabManager.runScript)
+                // may run; every page-initiated javascript: navigation stays denied as before.
+                val pending = tab.pendingScript
+                tab.pendingScript = null
+                if (pending != null && (request.isDirectNavigation || request.uri == pending)) GeckoResult.allow()
+                else { AppLog.i(TAG, "Blocked page-initiated javascript: navigation"); GeckoResult.deny() }
+            }
             "file" -> if (core.localContent.isAllowedLocalUri(uri)) GeckoResult.allow() else {
                 AppLog.i(TAG, "Blocked file:// navigation outside the projects folder"); GeckoResult.deny()
             }
@@ -206,6 +218,21 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
     }
 
     // ================================================================== helpers
+
+    /** Per-site "Desktop site" rule (Site permissions dialog / desktop toggle): switch UA + viewport before the load starts. */
+    private fun applyDesktopSiteRule(uri: String) {
+        val origin = SitePermissionStore.originOf(uri) ?: return
+        val want = when (core.sitePermissions.get(tab.sessionId, origin, SitePermissionType.DESKTOP_SITE)) {
+            PermissionValue.ALLOW -> true
+            PermissionValue.BLOCK -> false
+            else -> return
+        }
+        if (tab.desktopMode == want) return
+        tab.desktopMode = want
+        core.sessions.get(tab.sessionId)?.let { SessionFactory.applyTabSettings(tab, it) }
+        core.tabs.persistTab(tab)
+        AppLog.i(TAG, "Desktop site rule applied ($want) for $origin")
+    }
 
     private fun describe(error: WebRequestError): String = when (error.code) {
         WebRequestError.ERROR_UNKNOWN_HOST -> "Server not found"

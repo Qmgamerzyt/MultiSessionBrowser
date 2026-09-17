@@ -103,4 +103,11 @@
         <Preference android:key="about_webview" android:title="@string/pref_isolation_status" android:selectable="false" />
         <Preference android:key="copyright" android:title="@string/copyright" android:selectable="false" />
     </PreferenceCategory>
+    <PreferenceCategory android:title="WebRTC">
+        <SwitchPreferenceCompat
+            android:key="webrtc_compat"
+            android:defaultValue="true"
+            android:title="@string/webrtc_note"
+            android:summary="Exposes audio output devices to sites and enables full-duplex audio in every UA mode. Takes effect after the app is restarted." />
+    </PreferenceCategory>
 </PreferenceScreen>

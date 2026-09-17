@@ -2,7 +2,6 @@ package app.multisession.browser.ui.browser
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.app.DownloadManager
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -26,7 +25,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
-import android.widget.PopupMenu
+import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
@@ -36,9 +35,11 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.graphics.drawable.DrawableCompat
+import androidx.core.view.GravityCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.isVisible
+import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -49,23 +50,34 @@ import app.multisession.browser.core.Prefs
 import app.multisession.browser.core.UrlUtils
 import app.multisession.browser.data.db.BookmarkEntity
 import app.multisession.browser.data.db.SessionEntity
+import app.multisession.browser.downloads.AppDownloadManager
+import app.multisession.browser.downloads.DownloadStatus
 import app.multisession.browser.engine.BrowserHost
-import app.multisession.browser.engine.DownloadHandler
 import app.multisession.browser.engine.SessionFactory
+import app.multisession.browser.extensions.ExtensionAction
+import app.multisession.browser.extensions.ExtensionHost
+import app.multisession.browser.permissions.PermissionValue
+import app.multisession.browser.permissions.SitePermissionStore
+import app.multisession.browser.permissions.SitePermissionType
 import app.multisession.browser.tabs.PageError
 import app.multisession.browser.tabs.Tab
 import app.multisession.browser.tabs.TabManager
+import app.multisession.browser.ui.downloads.DownloadsActivity
+import app.multisession.browser.ui.extensions.ExtensionsActivity
 import app.multisession.browser.ui.library.BookmarksActivity
 import app.multisession.browser.ui.library.HistoryActivity
 import app.multisession.browser.ui.library.ProjectsActivity
 import app.multisession.browser.ui.library.SimpleListActivity
 import app.multisession.browser.ui.sessions.SessionEditDialog
-import app.multisession.browser.ui.sessions.SessionsSheet
+import app.multisession.browser.ui.sessions.SessionsDrawer
 import app.multisession.browser.ui.settings.SettingsActivity
 import app.multisession.browser.ui.tabs.TabsSheet
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.mozilla.geckoview.BasicSelectionActionDelegate
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
@@ -73,6 +85,7 @@ import org.mozilla.geckoview.GeckoSession.PermissionDelegate.ContentPermission
 import org.mozilla.geckoview.GeckoSession.PermissionDelegate.MediaSource
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.GeckoWebExecutor
+import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebRequest
 import org.mozilla.geckoview.WebRequestError
 import org.mozilla.geckoview.WebResponse
@@ -84,22 +97,24 @@ import java.net.URISyntaxException
  * swapped in/out on tab switch (never destroyed for that). The native start page replaces the
  * GeckoView for empty tabs.
  *
+ * v2.0.2 UI: everything is app-owned - a left session drawer, compact back/forward/undo/redo next to it, the
+ * central address bar, a tabs button (tab/group sheet), a right app-menu drawer and an optional floating HUD.
+ *
  * Focus rules (v1.1.2 fix, preserved): the invisible focusHolder is the first focusable view, the
  * URL bar only gains focus from an explicit user tap, and returning to the app never rebuilds or
  * re-attaches the displayed content view - so a focused web input (e.g. OTP field) keeps focus.
  */
-class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, StartPageController.Callbacks {
+class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabManager.Listener, StartPageController.Callbacks, HudController.Actions {
 
     private val core get() = BrowserApp.core()
     override val activity: AppCompatActivity get() = this
 
     // ---- views
+    private lateinit var drawerLayout: DrawerLayout
     private lateinit var root: View
     private lateinit var browserRoot: View
     private lateinit var isolationBanner: TextView
     private lateinit var topBar: View
-    private lateinit var bottomBar: View
-    private lateinit var sessionChip: View
     private lateinit var sessionDot: View
     private lateinit var sessionName: TextView
     private lateinit var focusHolder: View
@@ -111,8 +126,15 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
     private lateinit var errorPage: View
     private lateinit var backButton: ImageButton
     private lateinit var forwardButton: ImageButton
+    private lateinit var undoButton: ImageButton
+    private lateinit var redoButton: ImageButton
     private lateinit var tabCountView: TextView
     private lateinit var fullscreenContainer: FrameLayout
+    private lateinit var sessionsDrawerView: View
+    private lateinit var menuDrawerView: View
+    private lateinit var sessionsDrawer: SessionsDrawer
+    private lateinit var appMenu: AppMenu
+    private lateinit var hud: HudController
 
     /** Created lazily and attached to [webContainer] only together with an OPEN session (see attachSession). */
     private var geckoView: GeckoView? = null
@@ -121,12 +143,19 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
     private var currentTabId: String? = null
     private var uiReady = false
     private var inFullScreen = false
+    /** Toolbar hidden by the HUD "fullscreen" item (not HTML5 fullscreen). */
+    private var toolbarHidden = false
     private lateinit var suggestionPopup: SuggestionPopup
 
     private var fileResultCallback: ((Array<Uri>?) -> Unit)? = null
     private var cameraOutputUri: Uri? = null
     private var pendingPermissionAction: ((Map<String, Boolean>) -> Unit)? = null
     private var activePermissionDialog: AlertDialog? = null
+    /** Permission prompts are shown one at a time, in order: a second request never cancels the first. */
+    private val promptQueue = ArrayDeque<PendingPrompt>()
+    private var promptShowing = false
+    private val sitePermissions get() = core.sitePermissions
+    private var extensionPopup: BottomSheetDialog? = null
 
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         handleFileChooserResult(result.resultCode, result.data)
@@ -145,6 +174,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
     }
 
     private val currentTab: Tab? get() = core.tabs.get(currentTabId)
+    fun currentTabIdOrNull(): String? = currentTabId
 
     // ================================================================== lifecycle
 
@@ -161,11 +191,19 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
             uiReady = true
             core.tabs.addListener(this@BrowserActivity)
             core.tabs.host = this@BrowserActivity
+            core.extensions.host = this@BrowserActivity
             updateIsolationBanner()
             showActiveSessionTab()
             handleIntent(intent)
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                core.sessions.active.collect { updateSessionChip(it) }
+            launch {
+                repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    core.sessions.active.collect { updateSessionChip(it) }
+                }
+            }
+            launch {
+                repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    core.sessions.sessions.collect { if (drawerLayout.isDrawerOpen(sessionsDrawerView)) sessionsDrawer.refresh() }
+                }
             }
         }
     }
@@ -189,6 +227,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         super.onStart()
         if (!uiReady) return
         core.tabs.host = this
+        core.extensions.host = this
         core.tabs.reapplySettings()
         val session = core.sessions.active.value
         val tab = currentTab
@@ -219,6 +258,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         currentTab?.let { captureThumbnail(it) }
         core.tabs.persistAll()
         if (core.tabs.host === this) core.tabs.host = null
+        if (core.extensions.host === this) core.extensions.host = null
     }
 
     override fun onDestroy() {
@@ -228,7 +268,10 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         }
         // Give the session back so a recreated Activity can attach it to its own GeckoView.
         try { geckoView?.releaseSession() } catch (t: Throwable) { AppLog.w(TAG, "releaseSession failed", t) }
+        promptQueue.forEach { it.cancel() }
+        promptQueue.clear()
         activePermissionDialog?.dismiss()
+        extensionPopup?.dismiss()
         if (::suggestionPopup.isInitialized) suggestionPopup.dismiss()
         super.onDestroy()
     }
@@ -241,12 +284,11 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
     // ================================================================== view binding
 
     private fun bindViews() {
+        drawerLayout = findViewById(R.id.drawerLayout)
         root = findViewById(R.id.root)
         browserRoot = findViewById(R.id.browserRoot)
         isolationBanner = findViewById(R.id.isolationBanner)
         topBar = findViewById(R.id.topBar)
-        bottomBar = findViewById(R.id.bottomBar)
-        sessionChip = findViewById(R.id.sessionChip)
         sessionDot = findViewById(R.id.sessionDot)
         sessionName = findViewById(R.id.sessionName)
         focusHolder = findViewById(R.id.focusHolder)
@@ -258,11 +300,28 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         errorPage = findViewById(R.id.errorPage)
         backButton = findViewById(R.id.backButton)
         forwardButton = findViewById(R.id.forwardButton)
+        undoButton = findViewById(R.id.undoButton)
+        redoButton = findViewById(R.id.redoButton)
         tabCountView = findViewById(R.id.tabCount)
         fullscreenContainer = findViewById(R.id.fullscreenContainer)
+        sessionsDrawerView = findViewById(R.id.sessionsDrawer)
+        menuDrawerView = findViewById(R.id.menuDrawer)
+        sessionsDrawer = SessionsDrawer(this, core, sessionsDrawerView)
+        appMenu = AppMenu(menuDrawerView, core)
+        hud = HudController(findViewById<LinearLayout>(R.id.hud), this)
+        // Drawers are opened only through their buttons (a swipe from the edge would fight with page gestures).
+        drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
+        drawerLayout.addDrawerListener(object : DrawerLayout.SimpleDrawerListener() {
+            override fun onDrawerOpened(drawerView: View) {
+                if (drawerView === sessionsDrawerView) sessionsDrawer.refresh() else if (drawerView === menuDrawerView) renderMenu()
+            }
+            override fun onDrawerClosed(drawerView: View) { drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED) }
+        })
 
-        sessionChip.setOnClickListener { SessionsSheet().show(supportFragmentManager, "sessions") }
+        findViewById<View>(R.id.sessionsButton).setOnClickListener { exitSearchMode(); openDrawer(sessionsDrawerView) }
+        findViewById<View>(R.id.menuButton).setOnClickListener { exitSearchMode(); openDrawer(menuDrawerView) }
         isolationBanner.setOnClickListener { showIsolationInfo() }
+        securityIcon.setOnClickListener { currentTab?.let { openSitePermissions(it) } }
 
         urlInput.setOnEditorActionListener { v, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
@@ -286,6 +345,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
                 // updateToolbar() must never do so.
                 if (!isSearchActive()) { suggestionPopup.dismiss(); return }
                 val input = s?.toString() ?: return
+                if (UrlUtils.isJavaScriptUrl(input)) { suggestionPopup.dismiss(); return }   // bookmarklets are never "searched"
                 val session = core.sessions.get(currentTab?.sessionId ?: return) ?: return
                 suggestionPopup.showSuggestions(input, session.id)
             }
@@ -295,10 +355,12 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
             if (tab.isLoading) tab.geckoSession?.stop() else reload(tab)
         }
         backButton.setOnClickListener { goBack() }
-        forwardButton.setOnClickListener { currentTab?.let { t -> if (t.canGoForward) t.geckoSession?.goForward() } }
+        forwardButton.setOnClickListener { goForward() }
+        undoButton.setOnClickListener { hudUndo() }
+        undoButton.setOnLongClickListener { core.sessions.activeId?.let { sid -> core.tabs.reopenClosedTab(sid)?.let { showTab(it) } }; true }
+        redoButton.setOnClickListener { hudRedo() }
         findViewById<View>(R.id.newTabButton).setOnClickListener { newTab() }
-        findViewById<View>(R.id.tabsButton).setOnClickListener { TabsSheet().show(supportFragmentManager, "tabs") }
-        findViewById<View>(R.id.menuButton).setOnClickListener { showMenu(it) }
+        findViewById<View>(R.id.tabsButton).setOnClickListener { exitSearchMode(); TabsSheet().show(supportFragmentManager, "tabs") }
 
         findViewById<View>(R.id.errorRetry).setOnClickListener { currentTab?.let { reload(it) } }
         findViewById<View>(R.id.errorBack).setOnClickListener {
@@ -312,6 +374,13 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         }
         suggestionPopup.anchor(findViewById(R.id.urlBox))
     }
+
+    private fun openDrawer(view: View) {
+        drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_UNLOCKED)
+        drawerLayout.openDrawer(view)
+    }
+
+    fun closeDrawers() = drawerLayout.closeDrawers()
 
     /** The single GeckoView of this Activity (created on first use). */
     @SuppressLint("ClickableViewAccessibility")
@@ -328,7 +397,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
      */
     private fun attachSession(tab: Tab, gs: GeckoSession) {
         if (!gs.isOpen) {
-            // Popup sessions are opened by Gecko itself right after onNewSession; they are shown from onPageStart.
             AppLog.w(TAG, "attachSession skipped: session of ${tab.id.take(8)} is not open yet")
             return
         }
@@ -399,7 +467,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         if (previous != null && previous.id != tab.id) {
             captureThumbnail(previous)
             if (inFullScreen) {
-                // Leaving a fullscreen video by switching tabs: restore the chrome now (previous is still current).
                 previous.geckoSession?.exitFullScreen()
                 onFullScreenChanged(previous, false)
             }
@@ -453,9 +520,15 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         }
     }
 
-    fun newTab(url: String = homeUrl()) {
+    /** The active session was deleted: show whatever session is active now. */
+    fun onActiveSessionReplaced() { currentTabId = null; showActiveSessionTab() }
+
+    /** Re-shows the current tab (used after its session data was cleared). */
+    fun refreshCurrentTab() { currentTab?.let { showTab(it) } }
+
+    fun newTab(url: String = homeUrl(), groupId: String? = null) {
         val session = core.sessions.active.value ?: return
-        val tab = core.tabs.createTab(session.id, url, select = true)
+        val tab = core.tabs.createTab(session.id, url, select = true, groupId = groupId)
         showTab(tab)
         if (tab.isStartPage) focusUrlBar()
     }
@@ -470,10 +543,35 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         updateTabCount()
     }
 
+    /** Several tabs were closed by TabManager (group actions): make sure something is displayed. */
+    fun onTabsClosed(closed: List<Tab>) {
+        val sid = core.sessions.activeId ?: return
+        if (closed.any { it.id == currentTabId } || currentTab == null) {
+            currentTabId = null
+            val next = core.tabs.activeTab(sid) ?: core.tabs.createTab(sid, homeUrl(), select = true)
+            showTab(next)
+        }
+        updateTabCount()
+    }
+
+    fun closeAllTabs(sessionId: String) {
+        core.tabs.closeAllTabs(sessionId)
+        currentTabId = null
+        showActiveSessionTab()
+    }
+
     private fun navigate(input: String) {
         val tab = currentTab ?: return
         exitSearchMode()
+        if (UrlUtils.isJavaScriptUrl(input)) { runJavaScript(tab, input); return }
         loadInTab(tab, UrlUtils.resolveInput(input))
+    }
+
+    /** javascript: URL / bookmarklet typed or pasted into the address bar: executed in the current page, never searched. */
+    private fun runJavaScript(tab: Tab, source: String) {
+        if (tab.isStartPage || tab.geckoSession?.isOpen != true) { snack(getString(R.string.js_no_page)); updateToolbar(tab); return }
+        if (core.tabs.runScript(tab, source)) snack(getString(R.string.js_executed))
+        updateToolbar(tab)   // the address bar shows the page URL again, not the script
     }
 
     private fun loadInTab(tab: Tab, url: String) {
@@ -510,7 +608,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         }
     }
 
-    override fun openSessions() = SessionsSheet().show(supportFragmentManager, "sessions")
+    override fun openSessions() = openDrawer(sessionsDrawerView)
 
     private fun reload(tab: Tab) {
         tab.error = null
@@ -530,15 +628,22 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         if (gs != null && tab.canGoBack) { tab.error = null; gs.goBack(); updateErrorPage(tab) }
     }
 
+    private fun goForward() {
+        val tab = currentTab ?: return
+        if (tab.canGoForward) tab.geckoSession?.goForward()
+    }
+
     private fun handleBack() {
         val tab = currentTab
         when {
+            drawerLayout.isDrawerOpen(sessionsDrawerView) || drawerLayout.isDrawerOpen(menuDrawerView) -> drawerLayout.closeDrawers()
             inFullScreen -> {
                 val gs = tab?.geckoSession
                 if (gs != null) gs.exitFullScreen()          // Gecko answers with onFullScreen(false)
                 else if (tab != null) onFullScreenChanged(tab, false)
                 else inFullScreen = false
             }
+            toolbarHidden -> setToolbarHidden(false)
             urlInput.hasFocus() -> exitSearchMode()
             tab?.geckoSession != null && tab.canGoBack -> goBack()
             tab?.openerTabId != null -> closeTab(tab)
@@ -555,12 +660,16 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         val dot = DrawableCompat.wrap(ContextCompat.getDrawable(this, R.drawable.bg_dot)!!.mutate())
         DrawableCompat.setTint(dot, session.color)
         sessionDot.background = dot
-        sessionChip.contentDescription = getString(R.string.cd_session_chip, session.name)
+        findViewById<View>(R.id.sessionsButton).contentDescription = getString(R.string.cd_session_chip, session.name)
         updateTabCount()
     }
 
     private fun updateToolbar(tab: Tab) {
-        if (!urlInput.hasFocus()) urlInput.setText(if (tab.isStartPage) "" else tab.url)
+        if (!urlInput.hasFocus()) {
+            // Runs on every progress tick: only touch the EditText (layout + text watcher) when the text changed.
+            val text = if (tab.isStartPage) "" else tab.url
+            if (urlInput.text?.toString() != text) urlInput.setText(text)
+        }
         securityIcon.setImageResource(
             when {
                 tab.isStartPage -> R.drawable.ic_search
@@ -578,6 +687,10 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         backButton.alpha = if (backButton.isEnabled) 1f else 0.35f
         forwardButton.isEnabled = live && tab.canGoForward
         forwardButton.alpha = if (forwardButton.isEnabled) 1f else 0.35f
+        val hasPage = live && !tab.isStartPage
+        undoButton.alpha = if (hasPage || core.sessions.activeId?.let { core.tabs.hasRecentlyClosed(it) } == true) 1f else 0.35f
+        redoButton.isEnabled = hasPage
+        redoButton.alpha = if (hasPage) 1f else 0.35f
     }
 
     private fun updateTabCount() {
@@ -587,9 +700,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
     }
 
     private fun updateIsolationBanner() {
-        // GeckoView isolates every session via its contextId on every device: the banner only exists
-        // for the (now impossible) shared-storage case.
-        isolationBanner.isVisible = !core.isolation.isIsolated
+        isolationBanner.isVisible = !core.isolation.isIsolated && !inFullScreen && !toolbarHidden
     }
 
     private fun showIsolationInfo() {
@@ -598,6 +709,12 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
             .setMessage(core.isolation.describe(this))
             .setPositiveButton(android.R.string.ok, null)
             .show()
+    }
+
+    /** Permissions manager for the site in [tab] (app menu -> Site permissions, or tap the lock/info icon in the URL bar). */
+    fun openSitePermissions(tab: Tab) {
+        if (tab.isStartPage || SitePermissionStore.originOf(tab.url) == null) { snack(getString(R.string.perm_no_site)); return }
+        SitePermissionsDialog(this, core, tab).show()
     }
 
     private fun updateErrorPage(tab: Tab) {
@@ -651,44 +768,93 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         if (sessionId == core.sessions.activeId) updateTabCount()
     }
 
-    // ================================================================== menu
+    // ================================================================== app menu (right drawer) + HUD
 
-    private fun showMenu(anchor: View) {
+    private fun renderMenu() {
         val tab = currentTab
-        val popup = PopupMenu(this, anchor)
-        popup.menuInflater.inflate(R.menu.menu_browser, popup.menu)
-        popup.menu.findItem(R.id.action_desktop).isChecked = tab?.desktopMode == true
-        popup.menu.findItem(R.id.action_reopen_closed).isVisible = core.sessions.activeId?.let { core.tabs.hasRecentlyClosed(it) } == true
+        val session = core.sessions.active.value
         val hasPage = tab != null && !tab.isStartPage
-        listOf(R.id.action_share, R.id.action_open_external, R.id.action_bookmark, R.id.action_desktop).forEach {
-            popup.menu.findItem(it).isEnabled = hasPage
+        val sid = core.sessions.activeId
+        val entries = mutableListOf<MenuEntry>()
+        fun entry(icon: Int, title: Int, enabled: Boolean = true, checked: Boolean? = null, badge: String? = null, run: () -> Unit) {
+            entries += MenuEntry(icon, getString(title), enabled, checked, badge) { closeDrawers(); run() }
         }
-        popup.setOnMenuItemClickListener { item ->
-            when (item.itemId) {
-                R.id.action_new_tab -> newTab()
-                R.id.action_new_session -> SessionEditDialog.show(this, null) { name, color, isPrivate ->
-                    lifecycleScope.launch { core.sessions.create(name, color, isPrivate); currentTabId = null; showActiveSessionTab() }
-                }
-                R.id.action_reopen_closed -> core.sessions.activeId?.let { sid -> core.tabs.reopenClosedTab(sid)?.let { showTab(it) } }
-                R.id.action_desktop -> tab?.let { toggleDesktop(it) }
-                R.id.action_share -> tab?.let { shareUrl(it.url, it.title) }
-                R.id.action_open_external -> tab?.let { openExternal(it.url) }
-                R.id.action_bookmark -> tab?.let { toggleBookmark(it) }
-                R.id.action_bookmarks -> openUrlLauncher.launch(Intent(this, BookmarksActivity::class.java))
-                R.id.action_history -> openUrlLauncher.launch(Intent(this, HistoryActivity::class.java))
-                R.id.action_downloads -> openDownloads()
-                R.id.action_projects -> openUrlLauncher.launch(Intent(this, ProjectsActivity::class.java))
-                R.id.action_clear_site_data -> confirmClearSessionData()
-                R.id.action_settings -> startActivity(Intent(this, SettingsActivity::class.java))
-            }
-            true
+        entry(R.drawable.ic_add, R.string.new_tab) { newTab() }
+        entry(R.drawable.ic_label, R.string.new_group) { sid?.let { s -> app.multisession.browser.ui.tabs.GroupEditDialog.show(root, null) { n, c -> core.tabs.createGroup(s, n.ifBlank { getString(R.string.group_default_name) }, c); TabsSheet().show(supportFragmentManager, "tabs") } } }
+        entry(R.drawable.ic_history, R.string.reopen_closed, enabled = sid?.let { core.tabs.hasRecentlyClosed(it) } == true) { sid?.let { s -> core.tabs.reopenClosedTab(s)?.let { showTab(it) } } }
+        entry(R.drawable.ic_menu, R.string.new_session) {
+            SessionEditDialog.show(this, null) { name, color, isPrivate -> lifecycleScope.launch { core.sessions.create(name, color, isPrivate); currentTabId = null; showActiveSessionTab() } }
         }
-        popup.show()
+        entry(R.drawable.ic_star, R.string.add_remove_bookmark, enabled = hasPage) { tab?.let { toggleBookmark(it) } }
+        entry(R.drawable.ic_share, R.string.share, enabled = hasPage) { tab?.let { shareUrl(it.url, it.title) } }
+        entry(R.drawable.ic_open_in_new, R.string.open_external, enabled = hasPage) { tab?.let { openExternal(it.url) } }
+        entry(R.drawable.ic_search, R.string.find_in_page, enabled = hasPage) { hudFind() }
+        entry(R.drawable.ic_desktop, R.string.desktop_site, enabled = hasPage, checked = tab?.desktopMode == true) { tab?.let { toggleDesktop(it) } }
+        entry(R.drawable.ic_lock, R.string.site_permissions, enabled = hasPage) { tab?.let { openSitePermissions(it) } }
+        entry(R.drawable.ic_hud, R.string.hud_show, checked = hud.isVisible) { hud.setVisible(!hud.isVisible) }
+        entry(R.drawable.ic_tune, R.string.hud_customize) { hud.customize() }
+        entry(R.drawable.ic_fullscreen, if (toolbarHidden) R.string.toolbar_show else R.string.hud_item_fullscreen) { setToolbarHidden(!toolbarHidden) }
+        entry(R.drawable.ic_star, R.string.bookmarks) { openUrlLauncher.launch(Intent(this, BookmarksActivity::class.java)) }
+        entry(R.drawable.ic_history, R.string.history) { openUrlLauncher.launch(Intent(this, HistoryActivity::class.java)) }
+        val active = core.downloads.activeCount
+        entry(R.drawable.ic_download, R.string.downloads, badge = if (active > 0) active.toString() else null) { openUrlLauncher.launch(Intent(this, DownloadsActivity::class.java)) }
+        entry(R.drawable.ic_extension, R.string.extensions, badge = core.extensions.extensions.value.size.takeIf { it > 0 }?.toString()) { openUrlLauncher.launch(Intent(this, ExtensionsActivity::class.java)) }
+        entry(R.drawable.ic_folder, R.string.local_projects) { openUrlLauncher.launch(Intent(this, ProjectsActivity::class.java)) }
+        entry(R.drawable.ic_delete, R.string.clear_site_data) { confirmClearSessionData() }
+        entry(R.drawable.ic_tune, R.string.settings) { startActivity(Intent(this, SettingsActivity::class.java)) }
+        val title = session?.name ?: getString(R.string.menu_app)
+        val subtitle = if (hasPage) UrlUtils.displayHost(tab!!.url) else ""
+        appMenu.render(title, subtitle, entries, core.extensions.actions.value.values) { a -> closeDrawers(); try { a.action.click() } catch (t: Throwable) { AppLog.w(TAG, "action click failed", t) } }
     }
 
+    /** HUD "fullscreen": hide the whole toolbar so the page gets the full screen; HUD stays usable. */
+    private fun setToolbarHidden(hidden: Boolean) {
+        toolbarHidden = hidden
+        topBar.isVisible = !hidden && !inFullScreen
+        updateIsolationBanner()
+        if (hidden) { if (!hud.isVisible) hud.setVisible(true); snack(getString(R.string.toolbar_hidden_hint)) }
+    }
+
+    private fun pageScript(tab: Tab?, js: String) {
+        val t = tab ?: currentTab ?: return
+        if (t.isStartPage || t.geckoSession?.isOpen != true) return
+        core.tabs.runScript(t, js)
+    }
+
+    override fun hudBack() = goBack()
+    override fun hudForward() = goForward()
+    override fun hudUndo() {
+        val t = currentTab
+        if (t != null && !t.isStartPage && t.geckoSession != null) pageScript(t, "document.execCommand('undo')")
+        else core.sessions.activeId?.let { sid -> core.tabs.reopenClosedTab(sid)?.let { showTab(it) } }
+    }
+    override fun hudRedo() { pageScript(currentTab, "document.execCommand('redo')") }
+    override fun hudReload() { currentTab?.let { reload(it) } }
+    override fun hudScrollTop() { pageScript(currentTab, "window.scrollTo({top:0,behavior:'smooth'})") }
+    override fun hudScrollBottom() { pageScript(currentTab, "window.scrollTo({top:document.documentElement.scrollHeight,behavior:'smooth'})") }
+    override fun hudDesktop() { currentTab?.let { toggleDesktop(it) } }
+    override fun hudToggleToolbar() { setToolbarHidden(!toolbarHidden) }
+    override fun hudNewTab() = newTab()
+    override fun hudCloseTab() { currentTab?.let { closeTab(it) } }
+    override fun hudFind() {
+        val tab = currentTab ?: return
+        val gs = tab.geckoSession?.takeIf { it.isOpen } ?: return
+        val input = EditText(this).apply { hint = getString(R.string.find_hint); setSingleLine() }
+        MaterialAlertDialogBuilder(this).setTitle(R.string.find_in_page).setView(input)
+            .setPositiveButton(R.string.find_next) { _, _ ->
+                val q = input.text.toString(); if (q.isNotBlank()) try { gs.finder.find(q, 0) } catch (t: Throwable) { AppLog.w(TAG, "find failed", t) }
+            }
+            .setNegativeButton(android.R.string.cancel) { _, _ -> try { gs.finder.clear() } catch (_: Throwable) {} }
+            .show()
+    }
+
+    /** Desktop mode toggle: applied to the tab now AND remembered per site + session (Desktop site rule). */
     private fun toggleDesktop(tab: Tab) {
         tab.desktopMode = !tab.desktopMode
         core.sessions.get(tab.sessionId)?.let { SessionFactory.applyTabSettings(tab, it) }
+        SitePermissionStore.originOf(tab.url)?.let { origin ->
+            sitePermissions.set(tab.sessionId, origin, SitePermissionType.DESKTOP_SITE, if (tab.desktopMode) PermissionValue.ALLOW else PermissionValue.ASK)
+        }
         tab.geckoSession?.reload()
         core.tabs.persistTab(tab)
         snack(getString(if (tab.desktopMode) R.string.desktop_on else R.string.desktop_off))
@@ -707,14 +873,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         startActivity(Intent.createChooser(Intent(Intent.ACTION_VIEW, Uri.parse(url)), getString(R.string.open_external))); true
     } catch (e: ActivityNotFoundException) {
         snack(getString(R.string.no_app_found)); false
-    }
-
-    private fun openDownloads() {
-        try {
-            startActivity(Intent(DownloadManager.ACTION_VIEW_DOWNLOADS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        } catch (e: ActivityNotFoundException) {
-            snack(getString(R.string.no_app_found))
-        }
     }
 
     private fun toggleBookmark(tab: Tab) {
@@ -764,12 +922,83 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
             .show()
     }
 
+    // ================================================================== ExtensionHost
+
+    override fun onExtensionInstallPrompt(ext: WebExtension, permissions: List<String>, origins: List<String>, dataCollection: List<String>, onDecision: (Boolean) -> Unit) {
+        var decided = false
+        val decide: (Boolean) -> Unit = { if (!decided) { decided = true; onDecision(it) } }
+        val perms = permissions.ifEmpty { listOf(getString(R.string.ext_permissions_none)) }.joinToString("\n") { "• $it" }
+        val hosts = if (origins.isNotEmpty()) "\n\n" + getString(R.string.ext_host_permissions, origins.joinToString("\n") { "• $it" }) else ""
+        val data = if (dataCollection.isNotEmpty()) "\n\nData collection:\n" + dataCollection.joinToString("\n") { "• $it" } else ""
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.ext_install_prompt_title, ext.metaData.name ?: ext.id))
+            .setMessage(getString(R.string.ext_install_prompt_msg, ext.metaData.version ?: "?", perms) + hosts + data)
+            .setPositiveButton(R.string.import_action) { _, _ -> decide(true) }
+            .setNegativeButton(android.R.string.cancel) { _, _ -> decide(false) }
+            .setOnDismissListener { decide(false) }
+            .show()
+    }
+
+    override fun onExtensionOptionalPrompt(ext: WebExtension, permissions: List<String>, origins: List<String>, onDecision: (Boolean) -> Unit) {
+        var decided = false
+        val decide: (Boolean) -> Unit = { if (!decided) { decided = true; onDecision(it) } }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.ext_optional_prompt_title, ext.metaData.name ?: ext.id))
+            .setMessage((permissions + origins).joinToString("\n") { "• $it" })
+            .setPositiveButton(R.string.allow) { _, _ -> decide(true) }
+            .setNegativeButton(R.string.block) { _, _ -> decide(false) }
+            .setOnDismissListener { decide(false) }
+            .show()
+    }
+
+    /** browserAction popup: rendered in an app-owned bottom sheet holding its own GeckoView. */
+    override fun showExtensionPopup(ext: WebExtension, popupSession: GeckoSession) {
+        extensionPopup?.dismiss()
+        val sheet = BottomSheetDialog(this)
+        val view = LayoutInflater.from(this).inflate(R.layout.sheet_extension_popup, null)
+        view.findViewById<TextView>(R.id.popupTitle).text = ext.metaData.name ?: getString(R.string.ext_popup)
+        val gv = GeckoView(this)
+        view.findViewById<FrameLayout>(R.id.popupContainer).addView(gv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        popupSession.contentDelegate = object : GeckoSession.ContentDelegate {
+            override fun onCloseRequest(session: GeckoSession) { sheet.dismiss() }
+        }
+        popupSession.navigationDelegate = object : GeckoSession.NavigationDelegate {
+            override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<org.mozilla.geckoview.AllowOrDeny>? {
+                // Links out of the popup open as normal tabs in the active session; the popup itself only shows extension pages.
+                if (request.uri.startsWith("moz-extension://") || request.uri.startsWith("about:")) return GeckoResult.allow()
+                sheet.dismiss(); openUrl(request.uri, newTab = true); return GeckoResult.deny()
+            }
+        }
+        gv.setSession(popupSession)
+        sheet.setContentView(view)
+        sheet.setOnDismissListener {
+            try { gv.releaseSession() } catch (_: Throwable) {}
+            try { popupSession.close() } catch (_: Throwable) {}
+            if (extensionPopup === sheet) extensionPopup = null
+        }
+        extensionPopup = sheet
+        sheet.show()
+    }
+
+    override fun onExtensionsChanged() {
+        if (drawerLayout.isDrawerOpen(menuDrawerView)) renderMenu()
+    }
+
+    override fun onExtensionNewTab(ext: WebExtension, url: String?, active: Boolean): Tab? {
+        val sid = core.sessions.activeId ?: return null
+        val tab = core.tabs.createExtensionTab(sid, url) ?: return null   // shown as soon as Gecko starts loading it (onPageStart)
+        updateTabCount()
+        return tab
+    }
+
+    override fun onExtensionOpenOptions(ext: WebExtension, url: String) = openUrl(url, newTab = true)
+
     // ================================================================== BrowserHost
 
     override fun onTabOpenedByPage(tab: Tab) = showTab(tab)
 
     override fun onPageRequestedClose(tab: Tab) {
-        if (tab.openerTabId != null) closeTab(tab)
+        if (tab.openerTabId != null || core.tabs.get(tab.id) != null) closeTab(tab)
     }
 
     override fun onSessionClosing(tab: Tab) {
@@ -787,7 +1016,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
             updateErrorPage(tab)
             updateToolbar(tab)
         } else {
-            // Killed for memory while (probably) not visible: transparently re-open from saved state.
             showTab(tab)
         }
     }
@@ -795,9 +1023,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
     override fun onFullScreenChanged(tab: Tab, fullScreen: Boolean) {
         if (tab.id != currentTabId) return
         inFullScreen = fullScreen
-        topBar.isVisible = !fullScreen
-        bottomBar.isVisible = !fullScreen
-        isolationBanner.isVisible = !fullScreen && !core.isolation.isIsolated
+        topBar.isVisible = !fullScreen && !toolbarHidden
+        updateIsolationBanner()
         progressBar.isVisible = !fullScreen && tab.isLoading && tab.progress < 100
         val controller = WindowInsetsControllerCompat(window, window.decorView)
         if (fullScreen) {
@@ -873,35 +1100,59 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         }
     }
 
-    /** Site permissions. GeckoView 155 removed the named PERMISSION_* int constants.
-     *  We use VALUE_PROMPT for all types so Gecko shows its own default dialog. */
-    override fun onContentPermissionRequest(tab: Tab, perm: ContentPermission): GeckoResult<Int> {
-        return GeckoResult.fromValue(ContentPermission.VALUE_PROMPT)
-    }
+    // Site permission model (v2.0.1, unchanged in v2.0.2 apart from the media revocation in SitePermissionStore.set)
+    //  * SitePermissionStore (Room, per browser session + origin) holds the user's Allow/Block answers for
+    //    camera, microphone and every content permission. getUserMedia answers live ONLY here - Gecko never
+    //    persists media permissions.
+    //  * Gecko's permission manager (per contextId) receives VALUE_ALLOW / VALUE_DENY and is edited with
+    //    StorageController.setPermission from the Site permissions dialog, so both stores agree.
+    //  * Android runtime permissions are requested only when a site is actually allowed to use the device.
 
-    private fun askContentPermission(host: String, message: String, onDecision: (Boolean) -> GeckoResult<Int>): GeckoResult<Int> {
-        val result = GeckoResult<Int>()
-        var decided = false
-        fun decide(allowed: Boolean) {
-            if (decided) return
-            decided = true
-            onDecision(allowed).accept { v -> result.complete(v ?: ContentPermission.VALUE_DENY) }
+    private enum class Decision { ALLOW, BLOCK, DISMISS }
+    private class PendingPrompt(val show: () -> Unit, val cancel: () -> Unit)
+
+    override fun onContentPermissionRequest(tab: Tab, perm: ContentPermission): GeckoResult<Int> {
+        when (perm.permission) {
+            SitePermissionType.GECKO_AUTOPLAY_INAUDIBLE_TYPE, SitePermissionType.GECKO_PERSISTENT_STORAGE_TYPE ->
+                return GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
+            SitePermissionType.GECKO_TRACKING_TYPE ->
+                return GeckoResult.fromValue(ContentPermission.VALUE_DENY)
         }
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle(host)
-            .setMessage(message)
-            .setPositiveButton(R.string.allow) { _, _ -> decide(true) }
-            .setNegativeButton(R.string.block) { _, _ -> decide(false) }
-            .setOnCancelListener { decide(false) }
-            .create()
-        dialog.setOnDismissListener { decide(false); if (activePermissionDialog === dialog) activePermissionDialog = null }
-        activePermissionDialog?.dismiss()
-        activePermissionDialog = dialog
-        dialog.show()
+        val type = SitePermissionType.fromGecko(perm.permission)
+        val origin = SitePermissionStore.originOf(perm.uri) ?: SitePermissionStore.originOf(tab.url)
+        if (type == null || origin == null) return GeckoResult.fromValue(ContentPermission.VALUE_PROMPT)
+
+        when (sitePermissions.get(tab.sessionId, origin, type)) {
+            PermissionValue.ALLOW -> return GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
+            PermissionValue.BLOCK -> return GeckoResult.fromValue(ContentPermission.VALUE_DENY)
+        }
+        if (perm.value == ContentPermission.VALUE_ALLOW || perm.value == ContentPermission.VALUE_DENY) {
+            sitePermissions.set(tab.sessionId, origin, type, perm.value)
+            return GeckoResult.fromValue(perm.value)
+        }
+        if (type == SitePermissionType.AUTOPLAY_AUDIBLE) {
+            return GeckoResult.fromValue(if (Prefs.mediaAutoplay) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_PROMPT)
+        }
+        if (tab.id != currentTabId || !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            return GeckoResult.fromValue(ContentPermission.VALUE_PROMPT)
+        }
+        val result = GeckoResult<Int>()
+        AppLog.i(TAG, "Content permission ${type.key} requested by $origin")
+        promptPermission(originLabel(origin), permissionMessage(type)) { decision ->
+            when (decision) {
+                Decision.ALLOW -> { sitePermissions.set(tab.sessionId, origin, type, PermissionValue.ALLOW); result.complete(ContentPermission.VALUE_ALLOW) }
+                Decision.BLOCK -> { sitePermissions.set(tab.sessionId, origin, type, PermissionValue.BLOCK); result.complete(ContentPermission.VALUE_DENY) }
+                Decision.DISMISS -> result.complete(ContentPermission.VALUE_PROMPT)
+            }
+        }
         return result
     }
 
-    /** getUserMedia (WebRTC voice/video, e.g. Discord calls): choose camera + microphone after user consent. */
+    /**
+     * getUserMedia (WebRTC voice/video calls): remembered per site + session, granted after the Android permission check.
+     * Device selection is independent of the UA mode (mobile / desktop): the first real microphone and the front camera
+     * (or any camera) are handed to Gecko; SOURCE_OTHER audio sources are accepted too (virtual/USB inputs).
+     */
     override fun onMediaPermissionRequest(
         tab: Tab,
         uri: String,
@@ -918,37 +1169,99 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         val camera = video?.firstOrNull { it.source == MediaSource.SOURCE_CAMERA && it.name?.contains("front", true) == true }
             ?: video?.firstOrNull { it.source == MediaSource.SOURCE_CAMERA }
             ?: video?.firstOrNull { it.source != MediaSource.SOURCE_SCREEN }
-        val microphone = audio?.firstOrNull { it.source == MediaSource.SOURCE_MICROPHONE } ?: audio?.firstOrNull()
-        val what = listOfNotNull(
-            if (camera != null) getString(R.string.perm_camera) else null,
-            if (microphone != null) getString(R.string.perm_microphone) else null,
-        ).joinToString(", ")
-        if (what.isEmpty()) { callback.reject(); return }
-        val origin = UrlUtils.displayHost(uri).ifBlank { uri }
-        AppLog.i(TAG, "Media permission request from $origin: $what")
+        val microphone = audio?.firstOrNull { it.source == MediaSource.SOURCE_MICROPHONE }
+            ?: audio?.firstOrNull { it.source != MediaSource.SOURCE_AUDIOCAPTURE }
+            ?: audio?.firstOrNull()
+        if (camera == null && microphone == null) { callback.reject(); return }
+
+        val origin = SitePermissionStore.originOf(uri) ?: SitePermissionStore.originOf(tab.url)
+        val camState = if (camera != null && origin != null) sitePermissions.get(tab.sessionId, origin, SitePermissionType.CAMERA) else PermissionValue.ASK
+        val micState = if (microphone != null && origin != null) sitePermissions.get(tab.sessionId, origin, SitePermissionType.MICROPHONE) else PermissionValue.ASK
+        val undecided = buildList {
+            if (camera != null && camState == PermissionValue.ASK) add(SitePermissionType.CAMERA)
+            if (microphone != null && micState == PermissionValue.ASK) add(SitePermissionType.MICROPHONE)
+        }
+        val finish: (Boolean, Boolean) -> Unit = { camAllowed, micAllowed ->
+            grantMedia(if (camAllowed) camera else null, if (micAllowed) microphone else null, callback)
+        }
+        if (undecided.isEmpty()) {
+            AppLog.i(TAG, "Media permission for $origin answered from stored rules (camera=$camState mic=$micState)")
+            finish(camState == PermissionValue.ALLOW, micState == PermissionValue.ALLOW)
+            return
+        }
+        // Background tab of the SAME session (e.g. a call started, user switched tabs): answer from rules only, never prompt.
+        if (tab.id != currentTabId || !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) { callback.reject(); return }
+        val what = undecided.joinToString(", ") { getString(it.labelRes).lowercase() }
+        val label = origin?.let { originLabel(it) } ?: UrlUtils.displayHost(uri).ifBlank { uri }
+        AppLog.i(TAG, "Media permission request from $label: $what")
+        promptPermission(label, getString(R.string.perm_request_msg, what) + "\n\n" + getString(R.string.perm_change_hint)) { decision ->
+            if (decision == Decision.DISMISS) { callback.reject(); return@promptPermission }
+            val allowed = decision == Decision.ALLOW
+            if (origin != null) undecided.forEach { sitePermissions.set(tab.sessionId, origin, it, if (allowed) PermissionValue.ALLOW else PermissionValue.BLOCK) }
+            finish(
+                camera != null && (camState == PermissionValue.ALLOW || (camState == PermissionValue.ASK && allowed)),
+                microphone != null && (micState == PermissionValue.ALLOW || (micState == PermissionValue.ASK && allowed)),
+            )
+        }
+    }
+
+    /** The site is allowed: make sure the APP holds the Android permission(s), then hand the devices to Gecko. */
+    private fun grantMedia(camera: MediaSource?, microphone: MediaSource?, callback: GeckoSession.PermissionDelegate.MediaCallback) {
+        if (camera == null && microphone == null) { callback.reject(); return }
+        val androidPerms = buildList {
+            if (camera != null) add(Manifest.permission.CAMERA)
+            if (microphone != null) add(Manifest.permission.RECORD_AUDIO)
+        }
+        requestAndroidPermissions(androidPerms) { grants ->
+            val camOk = camera != null && (grants[Manifest.permission.CAMERA] ?: hasPermission(Manifest.permission.CAMERA))
+            val micOk = microphone != null && (grants[Manifest.permission.RECORD_AUDIO] ?: hasPermission(Manifest.permission.RECORD_AUDIO))
+            if (!camOk && !micOk) { callback.reject(); snack(getString(R.string.perm_android_denied)) }
+            else callback.grant(if (camOk) camera else null, if (micOk) microphone else null)
+        }
+    }
+
+    private fun originLabel(origin: String): String = UrlUtils.displayHost(origin).ifBlank { origin }
+
+    private fun permissionMessage(type: SitePermissionType): String {
+        val body = when (type) {
+            SitePermissionType.LOCATION -> getString(R.string.perm_location_msg)
+            SitePermissionType.NOTIFICATIONS -> getString(R.string.perm_notifications_msg)
+            SitePermissionType.DRM -> getString(R.string.perm_drm_msg)
+            else -> getString(R.string.perm_generic_msg, getString(type.labelRes).lowercase())
+        }
+        return body + "\n\n" + getString(R.string.perm_change_hint)
+    }
+
+    private fun promptPermission(title: String, message: String, onDecision: (Decision) -> Unit) {
         var decided = false
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle(origin)
-            .setMessage(getString(R.string.perm_request_msg, what))
-            .setPositiveButton(R.string.allow) { _, _ ->
-                decided = true
-                val androidPerms = buildList {
-                    if (camera != null) add(Manifest.permission.CAMERA)
-                    if (microphone != null) add(Manifest.permission.RECORD_AUDIO)
+        val decide: (Decision) -> Unit = { d -> if (!decided) { decided = true; onDecision(d) } }
+        promptQueue.addLast(PendingPrompt(
+            show = {
+                val dialog = MaterialAlertDialogBuilder(this)
+                    .setTitle(title)
+                    .setMessage(message)
+                    .setPositiveButton(R.string.allow) { _, _ -> decide(Decision.ALLOW) }
+                    .setNegativeButton(R.string.block) { _, _ -> decide(Decision.BLOCK) }
+                    .create()
+                dialog.setOnDismissListener {
+                    decide(Decision.DISMISS)
+                    if (activePermissionDialog === dialog) activePermissionDialog = null
+                    promptShowing = false
+                    showNextPrompt()
                 }
-                requestAndroidPermissions(androidPerms) { grants ->
-                    val camOk = camera != null && (grants[Manifest.permission.CAMERA] ?: hasPermission(Manifest.permission.CAMERA))
-                    val micOk = microphone != null && (grants[Manifest.permission.RECORD_AUDIO] ?: hasPermission(Manifest.permission.RECORD_AUDIO))
-                    if (!camOk && !micOk) { callback.reject(); snack(getString(R.string.perm_denied)) }
-                    else callback.grant(if (camOk) camera else null, if (micOk) microphone else null)
-                }
-            }
-            .setNegativeButton(R.string.block) { _, _ -> decided = true; callback.reject() }
-            .create()
-        dialog.setOnDismissListener { if (!decided) { decided = true; callback.reject() }; if (activePermissionDialog === dialog) activePermissionDialog = null }
-        activePermissionDialog?.dismiss()
-        activePermissionDialog = dialog
-        dialog.show()
+                activePermissionDialog = dialog
+                promptShowing = true
+                dialog.show()
+            },
+            cancel = { decide(Decision.DISMISS) },
+        ))
+        showNextPrompt()
+    }
+
+    private fun showNextPrompt() {
+        if (promptShowing || isFinishing || isDestroyed) return
+        val next = promptQueue.removeFirstOrNull() ?: return
+        next.show()
     }
 
     private fun hasPermission(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
@@ -973,7 +1286,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         } catch (e: URISyntaxException) {
             return true
         }
-        // Safe external intent handling: only BROWSABLE activities, never our own or explicit components.
         intent.addCategory(Intent.CATEGORY_BROWSABLE)
         intent.component = null
         intent.selector = null
@@ -989,41 +1301,38 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         }
     }
 
-    // ---- downloads -------------------------------------------------------------------------------
+    // ---- downloads (app-owned manager) -------------------------------------------------------------
 
     override fun onDownloadRequested(tab: Tab, response: WebResponse) {
-        val req = DownloadHandler.Request(response)
-        // A popup tab that only triggered a download is useless afterwards: close it.
+        val req = AppDownloadManager.Request(response)
         val emptyPopup = tab.openerTabId != null && (tab.url.isBlank() || tab.url == "about:blank" || tab.url == req.url)
         if (response.requestExternalApp && Prefs.openExternalApps && UrlUtils.isWebUrl(req.url)) {
-            // Gecko asks for an external app (e.g. a scheme/type the user prefers to open elsewhere).
-            if (openExternal(req.url)) { core.downloads.cancel(req); if (emptyPopup) closeTab(tab); return }
+            if (openExternal(req.url)) { core.downloads.discard(req); if (emptyPopup) closeTab(tab); return }
         }
+        val sourcePage = tab.url.takeIf { UrlUtils.isWebUrl(it) && it != req.url }
         val start = {
             ensureStoragePermission { ok ->
-                if (!ok) { core.downloads.cancel(req); snack(getString(R.string.perm_storage_denied)); return@ensureStoragePermission }
-                snack(getString(R.string.downloading, req.fileName))
-                core.downloads.start(req) { result ->
-                    result.onSuccess { snack(getString(R.string.download_complete, it)) }
-                        .onFailure { snack(getString(R.string.download_failed)) }
-                }
+                if (!ok) { core.downloads.discard(req); snack(getString(R.string.perm_storage_denied)); return@ensureStoragePermission }
+                core.downloads.start(req, tab.sessionId, sourcePage)
+                Snackbar.make(root, getString(R.string.dl_started, req.fileName), Snackbar.LENGTH_LONG)
+                    .setAction(R.string.downloads) { openUrlLauncher.launch(Intent(this, DownloadsActivity::class.java)) }.show()
             }
         }
         if (Prefs.askBeforeDownload) {
             val size = if (req.contentLength > 0) Formatter.formatFileSize(this, req.contentLength) else getString(R.string.unknown_size)
             MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.download_title)
-                .setMessage(getString(R.string.download_message, req.fileName, size, UrlUtils.displayHost(req.url)))
+                .setMessage(getString(R.string.download_message, req.fileName, size, UrlUtils.displayHost(req.url)) + "\n" + req.mimeType)
                 .setPositiveButton(R.string.download) { _, _ -> start() }
-                .setNeutralButton(R.string.open_external) { _, _ -> core.downloads.cancel(req); openExternal(req.url) }
-                .setNegativeButton(android.R.string.cancel) { _, _ -> core.downloads.cancel(req) }
-                .setOnCancelListener { core.downloads.cancel(req) }
+                .setNeutralButton(R.string.open_external) { _, _ -> core.downloads.discard(req); openExternal(req.url) }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> core.downloads.discard(req) }
+                .setOnCancelListener { core.downloads.discard(req) }
                 .show()
         } else start()
         if (emptyPopup) closeTab(tab)
     }
 
-    /** Fetches [url] through Gecko's network stack (no session cookies) and saves it - used for "download image". */
+    /** Fetches [url] through Gecko's network stack (default cookie jar) and saves it - used for "download image". */
     private fun downloadUrl(url: String) {
         if (!UrlUtils.isWebUrl(url)) { snack(getString(R.string.download_failed)); return }
         try {
@@ -1070,7 +1379,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
 
     // ================================================================== helpers
 
-    /** Async screenshot of the displayed session for the tab grid (GeckoView cannot be drawn to a Canvas). */
+    /** Async screenshot of the displayed session for the tab list (GeckoView cannot be drawn to a Canvas). */
     private fun captureThumbnail(tab: Tab) {
         val gv = geckoView ?: return
         val gs = tab.geckoSession ?: return
@@ -1078,9 +1387,11 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
         try {
             gv.capturePixels().accept({ bmp ->
                 if (bmp == null) return@accept
-                val scale = 0.33f
-                tab.thumbnail = Bitmap.createScaledBitmap(bmp, (bmp.width * scale).toInt().coerceAtLeast(1), (bmp.height * scale).toInt().coerceAtLeast(1), true)
-                if (tab.thumbnail !== bmp) bmp.recycle()
+                core.scope.launch(Dispatchers.Default) {
+                    val scaled = Bitmap.createScaledBitmap(bmp, (bmp.width * 0.33f).toInt().coerceAtLeast(1), (bmp.height * 0.33f).toInt().coerceAtLeast(1), true)
+                    if (scaled !== bmp) bmp.recycle()
+                    withContext(Dispatchers.Main) { tab.thumbnail = scaled }
+                }
             }, { AppLog.d(TAG, "thumbnail failed: ${it?.message}") })
         } catch (t: Throwable) {
             AppLog.d(TAG, "thumbnail not available: ${t.message}")
@@ -1097,7 +1408,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, TabManager.Listener, S
     }
 
     fun snack(text: String) {
-        Snackbar.make(root, text, Snackbar.LENGTH_SHORT).setAnchorView(findViewById<View>(R.id.bottomBar)).show()
+        Snackbar.make(root, text, Snackbar.LENGTH_SHORT).show()
     }
 
     companion object {

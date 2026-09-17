@@ -42,6 +42,7 @@ object SessionFactory {
         gs.contentDelegate = d
         gs.permissionDelegate = d
         gs.promptDelegate = BrowserPromptDelegate(core, tab)
+        core.extensions.attachToSession(gs, tab)   // browser.tabs.remove/update + per-tab actions for installed extensions
     }
 
     /** Re-applies per-tab settings that may change at runtime (desktop mode toggle, UA preference). */

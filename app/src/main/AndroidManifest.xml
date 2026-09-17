@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Downloaded APKs are opened through the system installer only after an explicit user confirmation (never silently). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- Android 9 only: needed to write downloads into the public Downloads folder. -->
@@ -71,6 +73,16 @@
             android:name=".ui.library.BookmarksActivity"
             android:exported="false"
             android:label="@string/bookmarks"
+            android:parentActivityName=".ui.browser.BrowserActivity" />
+        <activity
+            android:name=".ui.downloads.DownloadsActivity"
+            android:exported="false"
+            android:label="@string/downloads"
+            android:parentActivityName=".ui.browser.BrowserActivity" />
+        <activity
+            android:name=".ui.extensions.ExtensionsActivity"
+            android:exported="false"
+            android:label="@string/extensions"
             android:parentActivityName=".ui.browser.BrowserActivity" />
         <activity
             android:name=".ui.library.ProjectsActivity"

@@ -11,6 +11,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.UUID
 
+/**
+ * Sessions = isolated browsing identities. Ordering rules (v2.0.2):
+ *  - exactly one session is the DEFAULT session ([SessionEntity.isDefault]); it is always listed first and is
+ *    the session opened on a cold start of the process;
+ *  - the user may drag the other sessions into any order ([SessionEntity.sortOrder]); nothing can be moved
+ *    above the default session and the default session cannot be moved down.
+ */
 class SessionManager(private val core: BrowserCore) {
 
     private val _sessions = MutableStateFlow<List<SessionEntity>>(emptyList())
@@ -23,6 +30,8 @@ class SessionManager(private val core: BrowserCore) {
 
     fun get(id: String?): SessionEntity? = id?.let { sid -> _sessions.value.firstOrNull { it.id == sid } }
 
+    val defaultSession: SessionEntity? get() = _sessions.value.firstOrNull { it.isDefault } ?: _sessions.value.firstOrNull()
+
     suspend fun initialize() {
         val dao = core.repo.sessions
         // Private sessions never survive a process restart: discard them and their profile data.
@@ -33,14 +42,20 @@ class SessionManager(private val core: BrowserCore) {
         }
         var all = dao.getAll()
         if (all.isEmpty()) {
-            val s = newEntity(core.app.getString(R.string.default_session_name), PALETTE[0], false, 0)
+            val s = newEntity(core.app.getString(R.string.default_session_name), PALETTE[0], false, 0).copy(isDefault = true)
             dao.upsert(s)
             all = listOf(s)
             AppLog.i(TAG, "Created default session")
         }
+        if (all.none { it.isDefault }) {
+            // Cannot happen after migration 3->4, but never leave the app without a default session.
+            dao.setDefault(all.first().id)
+            all = dao.getAll()
+        }
         _sessions.value = all
-        val preferred = Prefs.activeSessionId
-        val chosen = all.firstOrNull { it.id == preferred } ?: all.maxByOrNull { it.lastUsedAt } ?: all.first()
+        // Cold start ALWAYS opens the default session (existing rule). Switching later is remembered only for
+        // the lifetime of the process (minimise/restore keeps the current session because the process survives).
+        val chosen = all.first { it.isDefault }
         _active.value = chosen
         Prefs.activeSessionId = chosen.id
     }
@@ -88,6 +103,35 @@ class SessionManager(private val core: BrowserCore) {
         replace(s.copy(desktopMode = enabled))
     }
 
+    /** Makes [id] the default session (listed first, opened on cold start). Private sessions cannot be the default. */
+    suspend fun setDefault(id: String) {
+        val s = get(id) ?: return
+        if (s.isPrivate) return
+        core.persistNow { core.repo.sessions.setDefault(id) }
+        _sessions.value = sorted(_sessions.value.map { it.copy(isDefault = it.id == id) })
+        _active.value = get(_active.value?.id)
+        AppLog.i(TAG, "Default session -> ${id.take(8)}")
+    }
+
+    /**
+     * User drag in the session drawer: [orderedIds] is the complete new order as displayed. The default session is
+     * forced back to the top whatever position it was dropped at, so the rule "default is always first" holds.
+     */
+    suspend fun reorder(orderedIds: List<String>) {
+        val byId = _sessions.value.associateBy { it.id }
+        if (orderedIds.size != byId.size || !orderedIds.all { byId.containsKey(it) }) return
+        val def = _sessions.value.firstOrNull { it.isDefault }
+        val ids = if (def != null) listOf(def.id) + orderedIds.filter { it != def.id } else orderedIds
+        val updated = ids.mapIndexed { i, id -> byId.getValue(id).copy(sortOrder = i) }
+        core.persistNow { core.repo.sessions.upsertAll(updated) }
+        _sessions.value = updated
+        _active.value = get(_active.value?.id)
+        AppLog.i(TAG, "Sessions reordered")
+    }
+
+    private fun sorted(list: List<SessionEntity>) =
+        list.sortedWith(compareByDescending<SessionEntity> { it.isDefault }.thenBy { it.sortOrder }.thenBy { it.createdAt })
+
     private suspend fun replace(updated: SessionEntity) {
         core.persistNow { core.repo.sessions.upsert(updated) }
         _sessions.value = _sessions.value.map { if (it.id == updated.id) updated else it }
@@ -104,14 +148,19 @@ class SessionManager(private val core: BrowserCore) {
     suspend fun delete(id: String) {
         val s = get(id) ?: return
         core.tabs.destroySession(id)
+        core.sitePermissions.clearSession(id)
         core.persistNow { core.repo.deleteSessionCascade(id) }
         _sessions.value = _sessions.value.filterNot { it.id == id }
         val profileDeleted = core.isolation.deleteProfileData(s)
         AppLog.i(TAG, "Session deleted ${id.take(8)} profileDeleted=$profileDeleted")
-        if (_active.value?.id == id) {
-            val next = _sessions.value.maxByOrNull { it.lastUsedAt }
+        if (s.isDefault) {
+            // Someone must be the default: promote the first remaining (non-private) session or create one.
+            val next = _sessions.value.firstOrNull { !it.isPrivate }
                 ?: create(core.app.getString(R.string.default_session_name), PALETTE[0], false, select = false)
-            switchTo(next.id)
+            setDefault(next.id)
+        }
+        if (_active.value?.id == id) {
+            switchTo((defaultSession ?: _sessions.value.first()).id)
         }
     }
 
@@ -130,6 +179,8 @@ class SessionManager(private val core: BrowserCore) {
         core.tabs.hibernateSession(id)
         if (cookies) core.isolation.clearCookies(s)
         if (storage) core.isolation.clearSiteData(s)
+        // clearDataForSessionContext also drops Gecko's stored site permissions of this context: mirror that.
+        if (cookies || storage) core.sitePermissions.clearSession(id)
         if (cache) core.isolation.clearCache(core.app, s)
         if (history) core.persistNow { core.repo.history.clear(id) }
     }
@@ -146,6 +197,7 @@ class SessionManager(private val core: BrowserCore) {
             isPrivate = isPrivate,
             desktopMode = false,
             sortOrder = sortOrder,
+            isDefault = false,
         )
     }
 

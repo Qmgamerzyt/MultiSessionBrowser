@@ -8,10 +8,11 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface SessionDao {
-    @Query("SELECT * FROM sessions ORDER BY sortOrder ASC, createdAt ASC")
+    // The default session is ALWAYS first; the user's manual order applies to everything after it.
+    @Query("SELECT * FROM sessions ORDER BY isDefault DESC, sortOrder ASC, createdAt ASC")
     fun observeAll(): Flow<List<SessionEntity>>
 
-    @Query("SELECT * FROM sessions ORDER BY sortOrder ASC, createdAt ASC")
+    @Query("SELECT * FROM sessions ORDER BY isDefault DESC, sortOrder ASC, createdAt ASC")
     suspend fun getAll(): List<SessionEntity>
 
     @Query("SELECT * FROM sessions WHERE id = :id")
@@ -21,6 +22,9 @@ interface SessionDao {
     @Upsert
     suspend fun upsert(session: SessionEntity)
 
+    @Upsert
+    suspend fun upsertAll(sessions: List<SessionEntity>)
+
     @Query("DELETE FROM sessions WHERE id = :id")
     suspend fun delete(id: String)
 
@@ -29,6 +33,13 @@ interface SessionDao {
 
     @Query("UPDATE sessions SET lastUsedAt = :now WHERE id = :id")
     suspend fun touch(id: String, now: Long)
+
+    @Query("UPDATE sessions SET sortOrder = :order WHERE id = :id")
+    suspend fun setOrder(id: String, order: Int)
+
+    /** Makes exactly one session the default. */
+    @Query("UPDATE sessions SET isDefault = CASE WHEN id = :id THEN 1 ELSE 0 END")
+    suspend fun setDefault(id: String)
 }
 
 @Dao
@@ -46,6 +57,27 @@ interface TabDao {
     suspend fun delete(id: String)
 
     @Query("DELETE FROM tabs WHERE sessionId = :sessionId")
+    suspend fun deleteForSession(sessionId: String)
+
+    @Query("UPDATE tabs SET groupId = NULL WHERE groupId = :groupId")
+    suspend fun clearGroup(groupId: String)
+}
+
+@Dao
+interface TabGroupDao {
+    @Query("SELECT * FROM tab_groups ORDER BY position ASC, createdAt ASC")
+    suspend fun getAll(): List<TabGroupEntity>
+
+    @Upsert
+    suspend fun upsert(group: TabGroupEntity)
+
+    @Upsert
+    suspend fun upsertAll(groups: List<TabGroupEntity>)
+
+    @Query("DELETE FROM tab_groups WHERE id = :id")
+    suspend fun delete(id: String)
+
+    @Query("DELETE FROM tab_groups WHERE sessionId = :sessionId")
     suspend fun deleteForSession(sessionId: String)
 }
 
@@ -101,4 +133,47 @@ interface BookmarkDao {
 
     @Query("DELETE FROM bookmarks WHERE sessionId = :sessionId")
     suspend fun deleteForSession(sessionId: String)
+}
+
+@Dao
+interface SitePermissionDao {
+    @Query("SELECT * FROM site_permissions")
+    suspend fun getAll(): List<SitePermissionEntity>
+
+    @Upsert
+    suspend fun upsert(rule: SitePermissionEntity)
+
+    @Query("DELETE FROM site_permissions WHERE sessionId = :sessionId AND origin = :origin AND permission = :permission")
+    suspend fun delete(sessionId: String, origin: String, permission: String)
+
+    @Query("DELETE FROM site_permissions WHERE sessionId = :sessionId AND origin = :origin")
+    suspend fun deleteForOrigin(sessionId: String, origin: String)
+
+    @Query("DELETE FROM site_permissions WHERE sessionId = :sessionId")
+    suspend fun deleteForSession(sessionId: String)
+}
+
+@Dao
+interface DownloadDao {
+    @Query("SELECT * FROM downloads ORDER BY createdAt DESC")
+    fun observeAll(): Flow<List<DownloadEntity>>
+
+    @Query("SELECT * FROM downloads ORDER BY createdAt DESC")
+    suspend fun getAll(): List<DownloadEntity>
+
+    @Query("SELECT * FROM downloads WHERE id = :id")
+    suspend fun get(id: String): DownloadEntity?
+
+    @Upsert
+    suspend fun upsert(download: DownloadEntity)
+
+    @Query("DELETE FROM downloads WHERE id = :id")
+    suspend fun delete(id: String)
+
+    /** Process died while downloading: nothing is running any more, so RUNNING/PENDING rows become PAUSED (resumable). */
+    @Query("UPDATE downloads SET status = :to, updatedAt = :now WHERE status IN (:from)")
+    suspend fun remap(from: List<Int>, to: Int, now: Long)
+
+    @Query("DELETE FROM downloads WHERE status IN (:statuses)")
+    suspend fun deleteWithStatus(statuses: List<Int>)
 }
