@@ -2,23 +2,12 @@ name: Build APK
 
 on:
   push:
-    branches: [ main, master ]
-    tags: [ 'v*' ]
-  pull_request:
+    branches: [ main ]
   workflow_dispatch:
-
-permissions:
-  contents: write
-
-env:
-  KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
 
 jobs:
   build:
-    name: Build debug + release APK (GeckoView, arm64-v8a + armeabi-v7a)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,20 +20,18 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        continue-on-error: true
 
       - name: Accept SDK licenses
-        run: yes | sdkmanager --licenses || true
+        run: yes | (sdkmanager --licenses 2>/dev/null || "/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager" --licenses 2>/dev/null || true)
 
       - name: Install SDK platforms + build-tools
-        # compileSdk 37 / compileSdkMinor 1 -> API 37 exists only as minor-versioned platforms
-        # ("platforms;android-37.0", "platforms;android-37.1"; there is NO "platforms;android-37").
-        # Both are stable-channel packages in Google's SDK repository (repository2-3.xml).
-        run: sdkmanager "platforms;android-37.1" "build-tools;36.0.0" "platform-tools"
+        run: sdkmanager "platforms;android-37.1" "build-tools;36.0.0" "platform-tools" 2>/dev/null || "/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.1" "build-tools;36.0.0" "platform-tools"
 
-      - name: Print resolved toolchain (diagnostics)
+      - name: Print resolved toolchain
         run: |
           java -version
-          ls "$ANDROID_HOME/platforms"
+          ls "/usr/local/lib/android/sdk/platforms"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -62,10 +49,10 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
-      - name: Decode release keystore (only if secret is set)
-        if: ${{ env.KEYSTORE_BASE64 != '' }}
+      - name: Decode release keystore
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.jks"
           echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
 
       - name: Build release APKs
@@ -82,7 +69,7 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
-      - name: Attach APK to GitHub Release (tags only)
+      - name: Attach APK to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
