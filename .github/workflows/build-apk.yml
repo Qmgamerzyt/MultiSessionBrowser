@@ -23,15 +23,15 @@ jobs:
         continue-on-error: true
 
       - name: Accept SDK licenses
-        run: yes | sdkmanager --licenses || true
+        run: yes | (sdkmanager --licenses 2>/dev/null || "/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager" --licenses 2>/dev/null || true)
 
       - name: Install SDK platforms + build-tools
-        run: sdkmanager "platforms;android-37.1" "build-tools;36.0.0" "platform-tools"
+        run: sdkmanager "platforms;android-37.1" "build-tools;36.0.0" "platform-tools" 2>/dev/null || "/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.1" "build-tools;36.0.0" "platform-tools"
 
       - name: Print resolved toolchain
         run: |
           java -version
-          ls "$ANDROID_HOME/platforms"
+          ls "/usr/local/lib/android/sdk/platforms"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
