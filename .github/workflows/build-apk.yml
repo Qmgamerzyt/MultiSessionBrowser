@@ -1,5 +1,9 @@
 name: Build APK
 
+# Builds the CURRENT checked-out source tree (app/ + Gradle files at the repository root). Nothing is taken from a
+# ZIP, a build/ folder or any other copy of the project. The "Verify source tree" step fails the run when the
+# checkout is not the expected version (e.g. a stale v2.0.0 tree) or when a release tag does not match versionName.
+
 on:
   push:
     branches: [ main, master ]
@@ -9,6 +13,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -23,28 +31,128 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify source tree (current version, matching tag, no stale copy)
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f settings.gradle.kts && test -f app/build.gradle.kts || { echo "::error::Gradle project not found at the repository root"; exit 1; }
+          test -f app/src/main/java/app/multisession/browser/tabs/TabManager.kt || { echo "::error::Current source tree missing (TabManager.kt) - stale project copy?"; exit 1; }
+          VN=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          VC=$(grep -oP 'versionCode = \K[0-9]+' app/build.gradle.kts)
+          echo "Source versionName=$VN versionCode=$VC (commit ${GITHUB_SHA::8})"
+          # The last public release was 2.0.0 (versionCode < 10). Anything at or below it is a stale checkout.
+          if [ "$VC" -lt 10 ]; then echo "::error::versionCode $VC belongs to an old release, refusing to build/publish it"; exit 1; fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/v}"
+            if [ "$TAG" != "$VN" ]; then echo "::error::Tag v$TAG does not match versionName $VN in app/build.gradle.kts"; exit 1; fi
+          fi
+          if grep -rq "android.webkit.WebView" app/src/main/java; then echo "::error::WebView reference found - engine must stay GeckoView"; exit 1; fi
+          echo "version_name=$VN" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VC" >> "$GITHUB_OUTPUT"
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
+      # ---------------------------------------------------------------------------------------------------------
+      # Android SDK setup.
+      # android-actions/setup-android@v3 installs its "packages" input one by one and its DEFAULT is
+      # "tools platform-tools". The legacy "tools" package no longer exists in Google's SDK repository, so
+      # "sdkmanager tools" fails ("Warning: Failed to find package 'tools'") and the action exits 1 BEFORE it
+      # exports ANDROID_HOME / ANDROID_SDK_ROOT or adds sdkmanager to PATH. Two safeguards:
+      #   1. "packages: platform-tools" - never ask the action for the obsolete "tools" package.
+      #   2. continue-on-error - even if the action fails for any other reason, the explicit sdkmanager
+      #      fallback below locates the real command-line tools, accepts licenses and installs everything.
+      # ---------------------------------------------------------------------------------------------------------
+      - name: Setup Android SDK (android-actions, must not abort the job)
+        id: setup-android
         uses: android-actions/setup-android@v3
+        continue-on-error: true
+        with:
+          packages: platform-tools
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
 
-      - name: Accept SDK licenses
-        run: yes | sdkmanager --licenses || true
+      - name: Android SDK fallback - locate sdkmanager, accept licenses, install required components
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "setup-android outcome: ${{ steps.setup-android.outcome }}"
 
-      - name: Install SDK platforms + build-tools
-        # compileSdk 37 / compileSdkMinor 1 -> API 37 exists only as minor-versioned platforms
-        # ("platforms;android-37.0", "platforms;android-37.1"; there is NO "platforms;android-37").
-        # Both are stable-channel packages in Google's SDK repository (repository2-3.xml).
-        run: sdkmanager "platforms;android-37.1" "build-tools;36.0.0" "platform-tools"
+          # 1) Resolve the SDK root. ubuntu-latest preinstalls the SDK at /usr/local/lib/android/sdk and exports
+          #    ANDROID_HOME / ANDROID_SDK_ROOT; setup-android uses ANDROID_SDK_ROOT (or ~/.android/sdk) as well.
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [ -z "$SDK_ROOT" ]; then
+            for c in /usr/local/lib/android/sdk "$HOME/.android/sdk" "$HOME/Android/Sdk"; do
+              if [ -d "$c" ]; then SDK_ROOT="$c"; break; fi
+            done
+          fi
+          SDK_ROOT="${SDK_ROOT:-$HOME/.android/sdk}"
+          mkdir -p "$SDK_ROOT"
+          echo "Using ANDROID_HOME=$SDK_ROOT"
+
+          # 2) Locate a real sdkmanager from the command-line tools (never the obsolete "tools" package):
+          #    prefer cmdline-tools/latest, then the highest versioned cmdline-tools/<ver>, then PATH,
+          #    and only as a last resort download the official command-line tools from Google.
+          find_sdkmanager() {
+            if [ -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+              echo "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"; return 0
+            fi
+            local best
+            best=$(ls -d "$SDK_ROOT"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -n 1 || true)
+            if [ -n "$best" ] && [ -x "$best" ]; then echo "$best"; return 0; fi
+            if command -v sdkmanager >/dev/null 2>&1; then command -v sdkmanager; return 0; fi
+            return 1
+          }
+          SDKMANAGER="$(find_sdkmanager || true)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "No sdkmanager found - downloading official command-line tools"
+            CLT_ZIP="$RUNNER_TEMP/commandlinetools.zip"
+            curl -fsSL -o "$CLT_ZIP" "https://dl.google.com/android/repository/commandlinetools-linux-12266719_latest.zip"
+            rm -rf "$RUNNER_TEMP/clt" && mkdir -p "$RUNNER_TEMP/clt"
+            unzip -q "$CLT_ZIP" -d "$RUNNER_TEMP/clt"
+            mkdir -p "$SDK_ROOT/cmdline-tools"
+            rm -rf "$SDK_ROOT/cmdline-tools/latest"
+            mv "$RUNNER_TEMP/clt/cmdline-tools" "$SDK_ROOT/cmdline-tools/latest"
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          test -x "$SDKMANAGER" || { echo "::error::sdkmanager not executable at $SDKMANAGER"; exit 1; }
+          echo "Using sdkmanager: $SDKMANAGER"
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --version
+
+          # 3) Accept all SDK licenses with this sdkmanager (yes|... may report a broken pipe once sdkmanager exits).
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
+          test -d "$SDK_ROOT/licenses" || { echo "::error::SDK licenses were not accepted"; exit 1; }
+
+          # 4) Install exactly what the build needs. compileSdk 37 / compileSdkMinor 1 -> "platforms;android-37.1"
+          #    (API 37 exists only as minor-versioned platforms; there is NO "platforms;android-37").
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platform-tools" "platforms;android-37.1" "build-tools;36.0.0"
+
+          # 5) Verify the components really exist where Gradle/AGP will look for them.
+          test -d "$SDK_ROOT/platforms/android-37.1" || { echo "::error::platforms;android-37.1 missing"; exit 1; }
+          test -d "$SDK_ROOT/build-tools/36.0.0"     || { echo "::error::build-tools;36.0.0 missing"; exit 1; }
+          test -x "$SDK_ROOT/platform-tools/adb"     || { echo "::error::platform-tools missing"; exit 1; }
+
+          # 6) Export the SDK location for every later step (Gradle reads ANDROID_HOME; ANDROID_SDK_ROOT kept in
+          #    sync for tools that still read it) and put sdkmanager/platform-tools on PATH.
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          # local.properties makes the SDK location explicit for Gradle even if the environment were lost.
+          if [ ! -f local.properties ]; then echo "sdk.dir=$SDK_ROOT" > local.properties; fi
 
       - name: Print resolved toolchain (diagnostics)
         run: |
           java -version
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
           ls "$ANDROID_HOME/platforms"
+          ls "$ANDROID_HOME/build-tools"
+          command -v sdkmanager && sdkmanager --version
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -55,10 +163,16 @@ jobs:
       - name: Build debug APKs
         run: gradle assembleDebug --no-daemon --stacktrace
 
+      - name: List built APKs (must carry the current version in their names)
+        shell: bash
+        run: |
+          ls -l app/build/outputs/apk/debug/
+          ls app/build/outputs/apk/debug/*.apk | grep -q "MultiSessionBrowser-${{ steps.version.outputs.version_name }}-" || { echo "::error::APK names do not carry versionName ${{ steps.version.outputs.version_name }}"; exit 1; }
+
       - name: Upload debug APKs
         uses: actions/upload-artifact@v4
         with:
-          name: MultiSessionBrowser-debug
+          name: MultiSessionBrowser-${{ steps.version.outputs.version_name }}-debug
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
@@ -73,18 +187,24 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: gradle assembleRelease --no-daemon --stacktrace
+        run: |
+          gradle assembleRelease --no-daemon --stacktrace
+          ls -l app/build/outputs/apk/release/
 
       - name: Upload release APKs
         uses: actions/upload-artifact@v4
         with:
-          name: MultiSessionBrowser-release
+          name: MultiSessionBrowser-${{ steps.version.outputs.version_name }}-release
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
-      - name: Attach APK to GitHub Release (tags only)
+      - name: Attach APKs to GitHub Release (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
+          name: MultiSessionBrowser ${{ steps.version.outputs.version_name }}
+          body: |
+            versionName ${{ steps.version.outputs.version_name }} (versionCode ${{ steps.version.outputs.version_code }}), built from commit ${{ github.sha }}.
+            One APK per ABI (arm64-v8a / armeabi-v7a); the file name contains the version.
           files: |
             app/build/outputs/apk/release/*.apk
