@@ -3,11 +3,15 @@ package app.multisession.browser.engine
 import android.net.Uri
 import app.multisession.browser.core.AppLog
 import app.multisession.browser.core.BrowserCore
+import app.multisession.browser.permissions.PermissionValue
+import app.multisession.browser.permissions.SitePermissionStore
+import app.multisession.browser.permissions.SitePermissionType
 import app.multisession.browser.tabs.PageError
 import app.multisession.browser.tabs.Tab
 import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.MediaSession
 import org.mozilla.geckoview.WebRequestError
 import org.mozilla.geckoview.WebResponse
 
@@ -20,7 +24,8 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
     GeckoSession.NavigationDelegate,
     GeckoSession.ProgressDelegate,
     GeckoSession.ContentDelegate,
-    GeckoSession.PermissionDelegate {
+    GeckoSession.PermissionDelegate,
+    MediaSession.Delegate {
 
     private val host: BrowserHost? get() = core.tabs.host
 
@@ -34,7 +39,10 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
     ) {
         // Also fires for pushState/replaceState navigations in SPAs and for redirects.
         val u = url ?: return
+        tab.sitePermissions = perms.toList()   // Gecko's stored permissions for this page (Site permissions dialog)
         if (u == "about:blank" && tab.awaitingDisplay) return   // popup placeholder, real URL follows
+        // Leaving the site ends any camera/microphone stream it held: the tab may be hibernated again.
+        if (tab.hasMediaCapture && SitePermissionStore.originOf(u) != SitePermissionStore.originOf(tab.url)) tab.hasMediaCapture = false
         tab.url = u
         core.tabs.notifyTabUpdated(tab)
     }
@@ -54,9 +62,17 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
         val scheme = uri.substringBefore(':', "").lowercase()
         return when (scheme) {
             "http", "https", "about", "data", "blob", "resource", "moz-extension" -> {
+                if ((scheme == "http" || scheme == "https") && !request.isRedirect) applyDesktopSiteRule(uri)
                 if (scheme == "resource" && !uri.startsWith(LocalContentLoader.BUNDLED_BASE)) GeckoResult.deny() else GeckoResult.allow()
             }
-            "javascript" -> GeckoResult.deny()                                  // never execute injected javascript: URLs
+            "javascript" -> {
+                // Only the ONE javascript: load this app itself issued (bookmarklet / HUD command, see TabManager.runScript)
+                // may run; every page-initiated javascript: navigation stays denied as before.
+                val pending = tab.pendingScript
+                tab.pendingScript = null
+                if (pending != null && (request.isDirectNavigation || request.uri == pending)) GeckoResult.allow()
+                else { AppLog.i(TAG, "Blocked page-initiated javascript: navigation"); GeckoResult.deny() }
+            }
             "file" -> if (core.localContent.isAllowedLocalUri(uri)) GeckoResult.allow() else {
                 AppLog.i(TAG, "Blocked file:// navigation outside the projects folder"); GeckoResult.deny()
             }
@@ -190,8 +206,10 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
     }
 
     override fun onContentPermissionRequest(session: GeckoSession, perm: GeckoSession.PermissionDelegate.ContentPermission): GeckoResult<Int>? {
+        // No foreground UI (Activity stopped): answer "ask again later". VALUE_DENY would be stored by Gecko's
+        // permission manager for this origin + context and silently block the site until the user finds the rule.
         return host?.onContentPermissionRequest(tab, perm)
-            ?: GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
+            ?: GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_PROMPT)
     }
 
     override fun onMediaPermissionRequest(
@@ -205,7 +223,31 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
         if (h == null) callback.reject() else h.onMediaPermissionRequest(tab, uri, video, audio, callback)
     }
 
+    // ================================================================== MediaSession.Delegate
+
+    // Used only for hibernation decisions (a tab playing audio/video is "busy"); playback itself is untouched.
+    override fun onActivated(session: GeckoSession, mediaSession: MediaSession) {}
+    override fun onDeactivated(session: GeckoSession, mediaSession: MediaSession) { tab.isPlayingMedia = false }
+    override fun onPlay(session: GeckoSession, mediaSession: MediaSession) { tab.isPlayingMedia = true }
+    override fun onPause(session: GeckoSession, mediaSession: MediaSession) { tab.isPlayingMedia = false }
+    override fun onStop(session: GeckoSession, mediaSession: MediaSession) { tab.isPlayingMedia = false }
+
     // ================================================================== helpers
+
+    /** Per-site "Desktop site" rule (Site permissions dialog / desktop toggle): switch UA + viewport before the load starts. */
+    private fun applyDesktopSiteRule(uri: String) {
+        val origin = SitePermissionStore.originOf(uri) ?: return
+        val want = when (core.sitePermissions.get(tab.sessionId, origin, SitePermissionType.DESKTOP_SITE)) {
+            PermissionValue.ALLOW -> true
+            PermissionValue.BLOCK -> false
+            else -> return
+        }
+        if (tab.desktopMode == want) return
+        tab.desktopMode = want
+        core.sessions.get(tab.sessionId)?.let { SessionFactory.applyTabSettings(tab, it) }
+        core.tabs.persistTab(tab)
+        AppLog.i(TAG, "Desktop site rule applied ($want) for $origin")
+    }
 
     private fun describe(error: WebRequestError): String = when (error.code) {
         WebRequestError.ERROR_UNKNOWN_HOST -> "Server not found"

@@ -15,4 +15,12 @@
         <item name="android:textAppearance">?attr/textAppearanceTitleSmall</item>
         <item name="android:textColor">?attr/colorPrimary</item>
     </style>
+    <style name="CompactBarButton">
+        <item name="android:layout_width">36dp</item>
+        <item name="android:layout_height">match_parent</item>
+        <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
+        <item name="android:scaleType">centerInside</item>
+        <item name="android:padding">7dp</item>
+        <item name="tint">?attr/colorOnSurface</item>
+    </style>
 </resources>

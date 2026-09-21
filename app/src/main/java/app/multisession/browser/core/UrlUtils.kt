@@ -20,21 +20,26 @@ object UrlUtils {
 
     fun isLocalContent(url: String?): Boolean = LocalContentLoader.isLocalUrl(url)
 
+    /** True for "javascript:..." input (any case, leading whitespace allowed): a bookmarklet, never a search query. */
+    fun isJavaScriptUrl(input: String?): Boolean = input?.trimStart()?.lowercase()?.startsWith("javascript:") == true
+
     /**
      * Address-bar resolution:
-     *  - explicit scheme -> load as-is (javascript: and file: are refused)
+     *  - javascript: -> returned unchanged; the caller executes it in the current page (never searched, never navigated)
+     *  - explicit scheme -> load as-is (file: is refused)
      *  - looks like a host/IP -> https:// (HTTPS-first; user can type http:// explicitly)
      *  - anything else -> configured search engine
      */
     fun resolveInput(raw: String): String {
         val input = raw.trim()
         if (input.isEmpty()) return START_PAGE
+        if (isJavaScriptUrl(input)) return input
         val lower = input.lowercase()
         if (lower == START_PAGE || lower == "about:blank") return START_PAGE
         if (lower.startsWith("file:")) {
             return Prefs.searchUrlFor(input)
         }
-        val passThrough = listOf("http://", "https://", "content://", "data:", "about:", "intent:")
+        val passThrough = listOf("http://", "https://", "content://", "data:", "about:", "intent:", "moz-extension://")
         if (passThrough.any { lower.startsWith(it) }) return input
         if (looksLikeHost(input)) return "https://$input"
         return Prefs.searchUrlFor(input)

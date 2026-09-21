@@ -71,3 +71,7 @@ swaps sessions into it — tab switching never destroys sessions.
 - "Download image" from the context menu fetches through Gecko's network stack **without** the
   session's cookies (public images only). Regular downloads (links, blobs) are fully session-aware.
 - HTTP cache clearing is global (Gecko has one cache store); cookies/storage clearing is per session.
+
+
+## v2.1.0 (Part 1) additions
+DB v5 (`MIGRATION_4_5`): pinned/archived tab columns, `closed_tabs`, `closed_groups`, `workspaces`, `workspace_groups`, `workspace_items`. New `MediaSession.Delegate` on every tab session (hibernation protection). See `PART1_CONTINUATION.md`.

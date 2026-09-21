@@ -7,16 +7,29 @@ import app.multisession.browser.data.db.AppDatabase
 class BrowserRepository(private val db: AppDatabase) {
     val sessions get() = db.sessions()
     val tabs get() = db.tabs()
+    val tabGroups get() = db.tabGroups()
     val history get() = db.history()
     val bookmarks get() = db.bookmarks()
+    val sitePermissions get() = db.sitePermissions()
+    val downloads get() = db.downloads()
+    val closedTabs get() = db.closedTabs()
+    val closedGroups get() = db.closedGroups()
+    val workspaces get() = db.workspaces()
 
-    /** Deletes a session and everything owned by it in one transaction. */
+    /** Deletes a session and everything owned by it in one transaction (downloads history is kept on purpose). */
     suspend fun deleteSessionCascade(sessionId: String) {
         db.withTransaction {
             db.tabs().deleteForSession(sessionId)
+            db.tabGroups().deleteForSession(sessionId)
             db.history().clear(sessionId)
             db.bookmarks().deleteForSession(sessionId)
+            db.sitePermissions().deleteForSession(sessionId)
+            db.closedTabs().deleteForSession(sessionId)
+            db.closedGroups().deleteForSession(sessionId)
+            // workspaces / workspace_groups / workspace_items follow through the FK cascade on sessions.
             db.sessions().delete(sessionId)
         }
     }
+
+    suspend fun <T> transaction(block: suspend () -> T): T = db.withTransaction { block() }
 }

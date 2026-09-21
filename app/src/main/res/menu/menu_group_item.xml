@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@+id/action_group_open" android:title="@string/open_group" />
+    <item android:id="@+id/action_group_new_tab" android:title="@string/new_tab_in_group" />
+    <item android:id="@+id/action_group_rename" android:title="@string/rename_group" />
+    <item android:id="@+id/action_group_up" android:title="@string/move_up" />
+    <item android:id="@+id/action_group_down" android:title="@string/move_down" />
+    <item android:id="@+id/action_group_close_tabs" android:title="@string/close_group_tabs" />
+    <item android:id="@+id/action_group_ungroup" android:title="@string/ungroup_all" />
+    <item android:id="@+id/action_group_delete" android:title="@string/delete_group_and_tabs" />
+</menu>

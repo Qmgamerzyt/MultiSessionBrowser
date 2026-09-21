@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- v2.1.0 Part 1: tab grid, pinning, archive, bulk actions, recently closed, workspaces -->
+    <string name="pinned_tabs">Pinned</string>
+    <string name="pin_tab">Pin tab</string>
+    <string name="unpin_tab">Unpin tab</string>
+    <string name="pin">Pin</string>
+    <string name="unpin">Unpin</string>
+    <string name="archive">Archive</string>
+    <string name="archive_tab">Archive tab</string>
+    <string name="archive_group_tabs">Archive tabs in group</string>
+    <string name="archived_tabs">Archived tabs</string>
+    <string name="archived_count_fmt">%1$d archived</string>
+    <string name="archived_empty">No archived tabs</string>
+    <string name="tabs_archived_fmt">%1$d tab(s) archived</string>
+    <string name="tabs_restored_fmt">%1$d tab(s) restored</string>
+    <string name="restore">Restore</string>
+    <string name="recently_closed">Recently closed</string>
+    <string name="recently_closed_empty">No recently closed tabs</string>
+    <string name="closed_group_fmt">Group: %1$s</string>
+    <string name="clear_list">Clear list</string>
+    <string name="select_tabs">Select tabs</string>
+    <string name="select_all">Select all</string>
+    <string name="clear_selection">Clear</string>
+    <string name="selected_fmt">%1$d selected</string>
+    <string name="nothing_selected">Nothing selected</string>
+    <string name="close_tabs_fmt">Close %1$d tabs?</string>
+    <string name="move_selected">Move</string>
+    <string name="group_selected">Group</string>
+    <string name="ungroup_selected">Ungroup</string>
+    <string name="no_group">No group</string>
+    <string name="rename">Rename</string>
+    <string name="duplicate">Duplicate</string>
+    <string name="workspaces">Workspaces</string>
+    <string name="workspace_new">Save current tabs as workspace…</string>
+    <string name="workspace_name_hint">Workspace name</string>
+    <string name="workspace_open">Open (add to current tabs)</string>
+    <string name="workspace_open_replace">Open and replace current tabs</string>
+    <string name="workspace_open_replace_confirm">The current tabs of this session will be closed (they stay in Recently closed) and the workspace tabs opened instead.</string>
+    <string name="workspace_update">Update with current tabs</string>
+    <string name="workspace_update_confirm">Replace the saved tabs and groups of this workspace with the session\'s current ones?</string>
+    <string name="workspace_update_done">Workspace updated</string>
+    <string name="workspace_saved">Workspace \"%1$s\" saved</string>
+    <string name="workspace_duplicated">Workspace duplicated</string>
+    <string name="workspace_delete_confirm">Delete workspace \"%1$s\"? Open tabs are not affected.</string>
+    <string name="workspace_restored_fmt">Workspace \"%1$s\" opened</string>
+    <string name="workspaces_empty">No workspaces in this session yet. Save the current tabs and groups to restore them later.</string>
+    <string name="pref_idle_hibernate">Release idle tabs after</string>
+    <string name="pref_idle_hibernate_summary">Background tabs unused for this long free their engine memory (state is kept and restored on return). Tabs playing media or in a call are never released.</string>
+</resources>

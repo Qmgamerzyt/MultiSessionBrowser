@@ -41,7 +41,9 @@ object SessionFactory {
         gs.progressDelegate = d
         gs.contentDelegate = d
         gs.permissionDelegate = d
+        gs.mediaSessionDelegate = d       // play/pause state -> tabs playing media are not hibernated automatically
         gs.promptDelegate = BrowserPromptDelegate(core, tab)
+        core.extensions.attachToSession(gs, tab)   // browser.tabs.remove/update + per-tab actions for installed extensions
     }
 
     /** Re-applies per-tab settings that may change at runtime (desktop mode toggle, UA preference). */

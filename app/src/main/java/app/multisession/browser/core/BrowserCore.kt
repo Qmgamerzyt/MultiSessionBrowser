@@ -1,15 +1,20 @@
 package app.multisession.browser.core
 
 import android.app.Application
+import android.content.SharedPreferences
 import app.multisession.browser.data.BrowserRepository
 import app.multisession.browser.data.db.AppDatabase
-import app.multisession.browser.engine.DownloadHandler
+import app.multisession.browser.downloads.AppDownloadManager
 import app.multisession.browser.engine.GeckoEngine
 import app.multisession.browser.engine.LocalContentLoader
+import app.multisession.browser.extensions.ExtensionManager
+import app.multisession.browser.permissions.SitePermissionStore
 import app.multisession.browser.projects.ProjectManager
 import app.multisession.browser.session.SessionIsolation
 import app.multisession.browser.session.SessionManager
+import app.multisession.browser.tabs.Tab
 import app.multisession.browser.tabs.TabManager
+import app.multisession.browser.workspaces.WorkspaceManager
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +23,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * Application-scoped single source of truth. Lives as long as the process does, so GeckoSessions
@@ -35,16 +41,35 @@ class BrowserCore(val app: Application) {
     val projects = ProjectManager(app, localContent)
     val sessions = SessionManager(this)
     val tabs = TabManager(this)
-    val downloads = DownloadHandler(this)
+    val downloads = AppDownloadManager(this)
+    val sitePermissions = SitePermissionStore(this)
+    val extensions = ExtensionManager(this)
+    val workspaces = WorkspaceManager(this)
 
     private val ready = CompletableDeferred<Unit>()
 
+    /** True once a preference changed; TabManager.reapplySettings() only touches the engine when set. */
+    @Volatile var settingsDirty = false
+    private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key != Prefs.KEY_ACTIVE_SESSION && key != Prefs.KEY_HUD_VISIBLE && key != Prefs.KEY_HUD_ITEMS) settingsDirty = true
+    }
+
     init {
+        Prefs.registerListener(prefListener)
         scope.launch {
             try {
                 sessions.initialize()
-                tabs.loadFromDb(repo.tabs.getAll())
+                // Every tab's SessionState JSON is parsed here: keep that off the main thread.
+                val restored = withContext(Dispatchers.Default) { repo.tabs.getAll().map { Tab.from(it) } }
+                val groups = repo.tabGroups.getAll()
+                val closedTabs = repo.closedTabs.getAll()
+                val closedGroups = repo.closedGroups.getAll()
+                tabs.loadFromDb(restored, groups, closedTabs, closedGroups)
+                workspaces.load()
+                sitePermissions.load()
+                downloads.load()
                 sessions.startObserving()
+                extensions.start()
                 AppLog.i(TAG, "Core ready. engine=${isolation.engineVersion()} sessions=${sessions.sessions.value.size}")
             } catch (t: Throwable) {
                 AppLog.e(TAG, "Core initialisation failed", t)

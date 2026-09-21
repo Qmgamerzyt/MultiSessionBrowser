@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- v2.1.2 bug-audit release -->
+    <string name="notif_channel_web">Website notifications</string>
+    <string name="notif_channel_web_desc">Notifications sent by websites you allowed</string>
+</resources>

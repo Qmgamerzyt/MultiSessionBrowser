@@ -4,10 +4,11 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_margin="6dp"
+    android:checkable="true"
     android:clickable="true"
     android:focusable="true"
-    app:cardCornerRadius="14dp"
-    app:strokeColor="?attr/colorPrimary"
+    app:cardCornerRadius="12dp"
+    app:cardElevation="1dp"
     app:strokeWidth="0dp">
 
     <LinearLayout
@@ -15,59 +16,92 @@
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
+        <View
+            android:id="@+id/tabGroupBar"
+            android:layout_width="match_parent"
+            android:layout_height="4dp"
+            android:visibility="gone" />
+
+        <!-- Title row: favicon-less compact header with title, pin marker, menu and close. -->
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="40dp"
+            android:layout_height="36dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="10dp">
-
+            android:paddingStart="10dp"
+            android:paddingEnd="0dp">
             <ImageView
-                android:id="@+id/tabFavicon"
-                android:layout_width="16dp"
-                android:layout_height="16dp"
-                android:contentDescription="@null" />
-
+                android:id="@+id/tabPinned"
+                android:layout_width="14dp"
+                android:layout_height="14dp"
+                android:layout_marginEnd="4dp"
+                android:contentDescription="@string/pinned_tabs"
+                android:src="@drawable/ic_pin"
+                android:visibility="gone"
+                app:tint="?attr/colorPrimary" />
             <TextView
                 android:id="@+id/tabTitle"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
                 android:layout_weight="1"
                 android:ellipsize="end"
-                android:singleLine="true"
+                android:maxLines="1"
                 android:textAppearance="?attr/textAppearanceLabelLarge" />
-
+            <CheckBox
+                android:id="@+id/tabCheck"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:visibility="gone" />
+            <ImageButton
+                android:id="@+id/tabMore"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/more_options"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_more_vert"
+                app:tint="?attr/colorOnSurfaceVariant" />
             <ImageButton
                 android:id="@+id/tabClose"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/close_tab"
+                android:scaleType="centerInside"
                 android:src="@drawable/ic_close"
                 app:tint="?attr/colorOnSurfaceVariant" />
         </LinearLayout>
 
         <FrameLayout
             android:layout_width="match_parent"
-            android:layout_height="130dp">
-
+            android:layout_height="132dp"
+            android:background="?attr/colorSurfaceContainerHigh">
             <ImageView
                 android:id="@+id/tabThumbnail"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:background="?attr/colorSurfaceVariant"
                 android:contentDescription="@null"
                 android:scaleType="centerCrop" />
-
+            <ImageView
+                android:id="@+id/tabPlaceholder"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_gravity="center"
+                android:alpha="0.5"
+                android:contentDescription="@null"
+                android:src="@drawable/ic_language"
+                app:tint="?attr/colorOnSurfaceVariant" />
             <View
                 android:id="@+id/tabLive"
                 android:layout_width="8dp"
                 android:layout_height="8dp"
-                android:layout_gravity="top|end"
+                android:layout_gravity="bottom|end"
                 android:layout_margin="8dp"
                 android:background="@drawable/bg_dot"
-                android:backgroundTint="@color/live_badge" />
+                android:backgroundTint="@color/live_badge"
+                android:visibility="gone" />
         </FrameLayout>
 
         <TextView
@@ -75,8 +109,11 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:ellipsize="end"
-            android:padding="10dp"
-            android:singleLine="true"
+            android:maxLines="1"
+            android:paddingStart="10dp"
+            android:paddingTop="4dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="8dp"
             android:textAppearance="?attr/textAppearanceBodySmall"
             android:textColor="?attr/colorOnSurfaceVariant" />
     </LinearLayout>

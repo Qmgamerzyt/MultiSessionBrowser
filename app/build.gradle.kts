@@ -28,8 +28,8 @@ android {
         applicationId = "app.multisession.browser"
         minSdk = 28                 // Android 9 (Pie). GeckoView >= 144 itself needs 26.
         targetSdk = 35
-        versionCode = 5
-        versionName = "2.0.0"
+        versionCode = 10
+        versionName = "2.1.2"
         vectorDrawables.useSupportLibrary = true
     }
 
@@ -89,6 +89,8 @@ android {
 
 // Distinct versionCode per ABI split (required if both APKs are ever uploaded to a store).
 // arm64-v8a gets the higher code so a 64-bit device prefers it. AAB builds keep the base code.
+// APK file names carry versionName + ABI + build type (e.g. MultiSessionBrowser-2.1.2-arm64-v8a-release.apk), so an
+// artifact or GitHub release can never be mistaken for a build of another version.
 val abiVersionCodes = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2)
 androidComponents {
     onVariants { variant ->
@@ -96,6 +98,8 @@ androidComponents {
             val abi = output.filters.firstOrNull { it.filterType == FilterConfiguration.FilterType.ABI }?.identifier
             val base = output.versionCode.orNull ?: 1
             output.versionCode.set(base * 10 + (abiVersionCodes[abi] ?: 0))
+            val versionName = output.versionName.orNull ?: "unknown"
+            output.outputFileName.set("MultiSessionBrowser-$versionName-${abi ?: "universal"}-${variant.name}.apk")
         }
     }
 }

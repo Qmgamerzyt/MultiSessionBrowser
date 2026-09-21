@@ -206,4 +206,27 @@
     <string name="pick_color">Pick a colour (#RRGGBB)</string>
     <string name="perm_screen_share_unsupported">Screen sharing is not supported in this browser.</string>
     <string name="download_complete">Saved %1$s to Downloads</string>
+
+    <!-- Site permissions (v2.0.1) -->
+    <string name="site_permissions">Site permissions</string>
+    <string name="perm_reset">Reset</string>
+    <string name="perm_reset_done">Site permissions reset to “Ask”</string>
+    <string name="perm_no_site">No website is open in this tab</string>
+    <string name="perm_android_settings">Android settings</string>
+    <string name="perm_android_missing">Not granted to this app in Android: %1$s</string>
+    <string name="perm_android_denied">Allow camera / microphone for this app in Android settings</string>
+    <string name="perm_label_camera">Camera</string>
+    <string name="perm_label_microphone">Microphone</string>
+    <string name="perm_label_location">Location</string>
+    <string name="perm_label_notifications">Notifications</string>
+    <string name="perm_label_autoplay">Autoplay with sound</string>
+    <string name="perm_label_drm">Protected media (DRM)</string>
+    <string name="perm_label_xr">Virtual reality</string>
+    <string name="perm_label_storage_access">Embedded content cookies</string>
+    <string name="perm_label_local_device">Local device access</string>
+    <string name="perm_label_local_network">Local network access</string>
+    <string name="perm_notifications_msg">This site wants to show notifications.</string>
+    <string name="perm_drm_msg">This site wants to play protected (DRM) content.</string>
+    <string name="perm_generic_msg">This site is asking for: %1$s.</string>
+    <string name="perm_change_hint">Your choice is remembered for this site in this session. Change it any time via Site permissions.</string>
 </resources>

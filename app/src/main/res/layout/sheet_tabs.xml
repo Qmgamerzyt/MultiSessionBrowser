@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -7,72 +8,115 @@
 
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="48dp"
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingStart="16dp"
-        android:paddingEnd="8dp">
-
+        android:paddingEnd="4dp">
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:orientation="vertical">
-
             <TextView
-                android:id="@+id/sheetTitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textAppearance="?attr/textAppearanceTitleLarge" />
-
+                android:text="@string/tabs"
+                android:textAppearance="?attr/textAppearanceTitleMedium" />
             <TextView
                 android:id="@+id/sheetSubtitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textAppearance="?attr/textAppearanceBodyMedium"
-                android:textColor="?attr/colorOnSurfaceVariant" />
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textAppearance="?attr/textAppearanceBodySmall" />
         </LinearLayout>
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/reopenButton"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/reopen_closed" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/closeAllButton"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/close_all" />
+        <ImageButton
+            android:id="@+id/newTabButton"
+            style="@style/CompactBarButton"
+            android:contentDescription="@string/new_tab"
+            android:src="@drawable/ic_add" />
+        <ImageButton
+            android:id="@+id/newGroupButton"
+            style="@style/CompactBarButton"
+            android:contentDescription="@string/new_group"
+            android:src="@drawable/ic_label" />
+        <ImageButton
+            android:id="@+id/selectButton"
+            style="@style/CompactBarButton"
+            android:alpha="0.7"
+            android:contentDescription="@string/select_tabs"
+            android:src="@drawable/ic_checklist" />
+        <ImageButton
+            android:id="@+id/moreButton"
+            style="@style/CompactBarButton"
+            android:contentDescription="@string/more_options"
+            android:src="@drawable/ic_more_vert" />
     </LinearLayout>
 
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
-
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/tabsRecycler"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:clipToPadding="false"
-            android:padding="8dp" />
-
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="16dp"
+            android:scrollbars="vertical" />
         <TextView
             android:id="@+id/emptyView"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
+            android:padding="32dp"
             android:text="@string/no_tabs"
+            android:textAppearance="?attr/textAppearanceBodyMedium"
             android:visibility="gone" />
     </FrameLayout>
 
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/newTabButton"
+    <!-- Multi-select action bar: one row, horizontally scrollable, hidden unless selection mode is on. -->
+    <LinearLayout
+        android:id="@+id/selectionBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_margin="16dp"
-        android:text="@string/new_tab" />
+        android:background="?attr/colorSurfaceContainer"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="12dp"
+        android:paddingEnd="4dp"
+        android:visibility="gone">
+        <TextView
+            android:id="@+id/selectionCount"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="64dp"
+            android:textAppearance="?attr/textAppearanceLabelLarge" />
+        <HorizontalScrollView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:scrollbars="none">
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <Button android:id="@+id/bulkSelectAll" style="@style/Widget.Material3.Button.TextButton" android:text="@string/select_all" />
+                <Button android:id="@+id/bulkClose" style="@style/Widget.Material3.Button.TextButton" android:text="@string/close_tab" />
+                <Button android:id="@+id/bulkMove" style="@style/Widget.Material3.Button.TextButton" android:text="@string/move_selected" />
+                <Button android:id="@+id/bulkGroup" style="@style/Widget.Material3.Button.TextButton" android:text="@string/group_selected" />
+                <Button android:id="@+id/bulkUngroup" style="@style/Widget.Material3.Button.TextButton" android:text="@string/ungroup_selected" />
+                <Button android:id="@+id/bulkArchive" style="@style/Widget.Material3.Button.TextButton" android:text="@string/archive" />
+                <Button android:id="@+id/bulkPin" style="@style/Widget.Material3.Button.TextButton" android:text="@string/pin" />
+            </LinearLayout>
+        </HorizontalScrollView>
+        <ImageButton
+            android:id="@+id/bulkDone"
+            style="@style/CompactBarButton"
+            android:contentDescription="@string/done"
+            android:src="@drawable/ic_close" />
+    </LinearLayout>
 </LinearLayout>

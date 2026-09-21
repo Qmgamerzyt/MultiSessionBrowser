@@ -68,6 +68,13 @@
             android:entries="@array/live_tab_names"
             android:entryValues="@array/live_tab_values"
             android:defaultValue="6" />
+<ListPreference
+            android:key="idle_hibernate_minutes"
+            android:title="@string/pref_idle_hibernate"
+            android:summary="@string/pref_idle_hibernate_summary"
+            android:entries="@array/idle_hibernate_entries"
+            android:entryValues="@array/idle_hibernate_values"
+            android:defaultValue="30" />
         <Preference android:key="clear_session_cookies" android:title="@string/clear_cookies" android:summary="@string/pref_current_session_only" />
         <Preference android:key="clear_session_storage" android:title="@string/clear_storage" android:summary="@string/pref_current_session_only" />
         <Preference android:key="clear_session_cache" android:title="@string/clear_cache" android:summary="@string/pref_current_session_only" />
@@ -102,5 +109,12 @@
     <PreferenceCategory android:title="@string/pref_about">
         <Preference android:key="about_webview" android:title="@string/pref_isolation_status" android:selectable="false" />
         <Preference android:key="copyright" android:title="@string/copyright" android:selectable="false" />
+    </PreferenceCategory>
+    <PreferenceCategory android:title="WebRTC">
+        <SwitchPreferenceCompat
+            android:key="webrtc_compat"
+            android:defaultValue="true"
+            android:title="@string/webrtc_note"
+            android:summary="Exposes audio output devices to sites and enables full-duplex audio in every UA mode. Takes effect after the app is restarted." />
     </PreferenceCategory>
 </PreferenceScreen>

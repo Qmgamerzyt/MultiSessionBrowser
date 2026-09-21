@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item android:id="@+id/action_install_url" android:title="@string/ext_install_url" app:showAsAction="never" />
+    <item android:id="@+id/action_install_file" android:title="@string/ext_install_file" app:showAsAction="never" />
+    <item android:id="@+id/action_ext_limits" android:title="@string/ext_limits_title" app:showAsAction="never" />
+</menu>

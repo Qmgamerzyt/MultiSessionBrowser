@@ -68,3 +68,37 @@ APKs: `app/build/outputs/apk/debug/app-arm64-v8a-debug.apk` and `app-armeabi-v7a
 - `blob:` downloads cannot be handled by Android DownloadManager; the app tells you and offers an external browser.
 
 See `docs/ARCHITECTURE.md`, `docs/TEST_PLAN.md` and the original specification in `docs/SPEC.md`.
+
+## v2.0.1 – loading fixes & persistent site permissions
+
+**Loading / stuck pages – root causes fixed**
+- `BrowserApp.onCreate` ran unguarded in GeckoView's child processes (`:tab0`, `:gpu`, …): every content process opened the Room DB, ran `SessionManager.initialize()` (deleting private sessions, rewriting the active-session preference) and delayed its own start-up. It now returns early outside the main process.
+- The `GeckoRuntime` is warmed up in `Application.onCreate` instead of on the first page load.
+- Engine settings are re-applied only when a preference actually changed (`BrowserCore.settingsDirty`), not on every return to the foreground.
+- `SessionState` JSON serialisation/parsing (tab persistence) moved off the main thread (`TabSnapshot`); URL-bar text is updated only when it changed; thumbnails are scaled off the main thread; loading tabs are the last to be frozen by the live-tab limit.
+
+**Persistent site permissions** (`permissions/SitePermissions.kt`, DB v3 `site_permissions`, migration 2→3 is additive)
+- Camera / microphone (getUserMedia) decisions are remembered per site *and* browser session; Gecko never persists these itself.
+- Content permissions (location, notifications, autoplay, DRM, …) are answered from the store, mirrored from Gecko's own permission manager (`ContentPermission.value`) and kept in sync via `StorageController.setPermission`.
+- Android runtime permissions are requested only when a site is allowed to use the device.
+
+**Site permissions manager**: menu → *Site permissions* (or tap the lock/info icon): Allow / Block / Ask per permission, Reset, and a link to Android settings when the app itself lacks a permission.
+
+
+## v2.0.2 – tabs & groups, session order, app-owned UI, downloads, javascript:, extensions
+
+**Bug fixes**
+- *Mobile-mode WebRTC audio*: Gecko prefs `media.setsinkid.enabled` (exposes `audiooutput` devices to `enumerateDevices()` / `setSinkId`) and `media.navigator.audio.full_duplex` are set through a GeckoView config file (`GeckoEngine.writeConfigFile`, `GeckoRuntimeSettings.configFilePath`). Microphone selection accepts non-`SOURCE_MICROPHONE` inputs. A per-site **Desktop site** rule (Site permissions → "Desktop site (always)", or the Desktop toggle) is applied *before* the load starts, for sites whose mobile-UA code path disables voice. Desktop mode itself is unchanged.
+- *Camera/mic revocation*: `SitePermissionStore.set(BLOCK)` for camera/microphone calls `TabManager.revokeMedia`, which reloads every live page of that origin in that session — the MediaStream tracks die with the document and the next `getUserMedia` is denied by the stored rule. Gecko, the app store and the running tracks stay in sync.
+
+**Tabs & groups (DB v4, additive migration 3→4)**: `tab_groups` table, `tabs.groupId`; create/rename/colour/collapse/open/close/ungroup/delete groups, add/move/remove tabs, new tab in group, drag-reorder (drop under a header = move into that group), empty groups persist. `TabManager.applyOrder` writes order + membership atomically.
+
+**Sessions**: `sessions.isDefault` (the first existing session became default in the migration). Default is always listed first and opened on cold start; the rest is drag-reorderable in the session drawer; "Set as default" in the session menu.
+
+**UI**: left three-line button → session drawer; back/forward/undo/redo next to it (undo/redo = page edit undo/redo; long-press undo = reopen closed tab); central address bar (all focus fixes preserved); new-tab + tabs button (tab/group sheet); right three-line button → app menu drawer (with extension buttons and Site permissions); floating selectable HUD (menu → Show HUD / Customize HUD; draggable; "Hide/show toolbar" item).
+
+**Downloads**: app-owned manager (`downloads/AppDownloadManager.kt`, `downloads` table) with progress, pause, resume (HTTP Range), cancel, retry, delete, open, share, copy link, source page, type classification (archive/APK/PDF/image/video/audio/Office/text). APKs open the system installer only after a confirmation; archives are never extracted. Gecko's session-authenticated stream is still used for the initial download (blob:/data: work); resume/retry re-fetch via `GeckoWebExecutor` in the default cookie jar (sign-in protected files report this and must be restarted from the page).
+
+**javascript: URLs**: `UrlUtils.resolveInput` returns them untouched; `BrowserActivity.navigate` runs them via `TabManager.runScript` (wrapped so the completion value is `undefined` → the page is never replaced); `TabDelegates.onLoadRequest` allows exactly that one app-initiated load and keeps denying page-initiated `javascript:` navigations.
+
+**Extensions**: real `WebExtensionController` wiring — see `docs/EXTENSIONS.md` for what works and the exact GeckoView/Android limitations.
