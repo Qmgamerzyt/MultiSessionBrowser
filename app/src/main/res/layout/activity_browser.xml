@@ -81,9 +81,6 @@
 
                     <ImageButton android:id="@+id/backButton" style="@style/CompactBarButton" android:contentDescription="@string/back" android:src="@drawable/ic_arrow_back" />
                     <ImageButton android:id="@+id/forwardButton" style="@style/CompactBarButton" android:contentDescription="@string/forward" android:src="@drawable/ic_arrow_forward" />
-                    <ImageButton android:id="@+id/undoButton" style="@style/CompactBarButton" android:contentDescription="@string/undo" android:src="@drawable/ic_undo" />
-                    <ImageButton android:id="@+id/redoButton" style="@style/CompactBarButton" android:contentDescription="@string/redo" android:src="@drawable/ic_redo" />
-
                     <TextView
                         android:id="@+id/sessionName"
                         android:layout_width="0dp"
@@ -191,6 +188,20 @@
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
                     android:visibility="gone" />
+                <!-- Fullscreen control nub: small draggable button on the right edge while the toolbar is hidden;
+                     tapping it reveals the full HUD option set. Populated/controlled by HudController. -->
+                <ImageButton
+                    android:id="@+id/hudNub"
+                    android:layout_width="44dp"
+                    android:layout_height="44dp"
+                    android:layout_gravity="center_end"
+                    android:layout_marginEnd="10dp"
+                    android:background="@drawable/bg_hud"
+                    android:contentDescription="@string/hud_show"
+                    android:elevation="6dp"
+                    android:src="@drawable/ic_hud"
+                    android:visibility="gone"
+                    app:tint="?attr/colorOnSurface" />
                 <!-- Compact selectable HUD (floating pill, never covers the page). Populated by HudController. -->
                 <include
                     android:id="@+id/hud"

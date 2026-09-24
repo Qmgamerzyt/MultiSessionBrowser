@@ -80,12 +80,21 @@ object Prefs {
         get() = sp.getBoolean(KEY_HUD_VISIBLE, false)
         set(value) = sp.edit().putBoolean(KEY_HUD_VISIBLE, value).apply()
 
-    /** Comma separated HUD item keys in display order (see ui.browser.HudController). */
+    /** Comma separated HUD item keys in display order (see ui.browser.HudController).
+     *  Values are filtered to [DEFAULT_HUD_KEYS] so preferences saved by older versions (2.1.2 and
+     *  earlier, which still contained toolbar/menu duplicates) cannot bring the redundant actions back. */
     var hudItems: List<String>
-        get() = (sp.getString(KEY_HUD_ITEMS, null) ?: DEFAULT_HUD).split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        get() = (sp.getString(KEY_HUD_ITEMS, null) ?: DEFAULT_HUD)
+            .split(',').map { it.trim() }
+            .filter { it in DEFAULT_HUD_KEYS }
+            .ifEmpty { DEFAULT_HUD_KEYS }
         set(value) = sp.edit().putString(KEY_HUD_ITEMS, value.joinToString(",")).apply()
 
-    const val DEFAULT_HUD = "back,forward,reload,top,bottom,desktop,fullscreen"
+    /** The customizable HUD set: only actions NOT already reachable from the toolbar or the app menu
+     *  (bug fix: de-duplicated). "fullscreen" (the app's toolbar toggle) is excluded from the pill but
+     *  the full original option set is still shown by the fullscreen nub popup (see HudController). */
+    const val DEFAULT_HUD = "top,bottom,closetab"
+    val DEFAULT_HUD_KEYS: List<String> get() = DEFAULT_HUD.split(',')
 
     fun nightMode(): Int = when (sp.getString(KEY_THEME, "system")) {
         "light" -> AppCompatDelegate.MODE_NIGHT_NO

@@ -128,8 +128,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     private lateinit var errorPage: View
     private lateinit var backButton: ImageButton
     private lateinit var forwardButton: ImageButton
-    private lateinit var undoButton: ImageButton
-    private lateinit var redoButton: ImageButton
     private lateinit var tabCountView: TextView
     private lateinit var fullscreenContainer: FrameLayout
     private lateinit var sessionsDrawerView: View
@@ -184,6 +182,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_browser)
         bindViews()
+        showCrashTraceIfAny()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { handleBack() }
         })
@@ -304,15 +303,13 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         errorPage = findViewById(R.id.errorPage)
         backButton = findViewById(R.id.backButton)
         forwardButton = findViewById(R.id.forwardButton)
-        undoButton = findViewById(R.id.undoButton)
-        redoButton = findViewById(R.id.redoButton)
         tabCountView = findViewById(R.id.tabCount)
         fullscreenContainer = findViewById(R.id.fullscreenContainer)
         sessionsDrawerView = findViewById(R.id.sessionsDrawer)
         menuDrawerView = findViewById(R.id.menuDrawer)
         sessionsDrawer = SessionsDrawer(this, core, sessionsDrawerView)
         appMenu = AppMenu(menuDrawerView, core)
-        hud = HudController(findViewById<LinearLayout>(R.id.hud), this)
+        hud = HudController(findViewById<LinearLayout>(R.id.hud), findViewById(R.id.hudNub), this)
         // Drawers are opened only through their buttons (a swipe from the edge would fight with page gestures).
         drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
         drawerLayout.addDrawerListener(object : DrawerLayout.SimpleDrawerListener() {
@@ -360,9 +357,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         }
         backButton.setOnClickListener { goBack() }
         forwardButton.setOnClickListener { goForward() }
-        undoButton.setOnClickListener { hudUndo() }
-        undoButton.setOnLongClickListener { core.sessions.activeId?.let { sid -> core.tabs.reopenClosedTab(sid)?.let { showTab(it) } }; true }
-        redoButton.setOnClickListener { hudRedo() }
         findViewById<View>(R.id.newTabButton).setOnClickListener { newTab() }
         findViewById<View>(R.id.tabsButton).setOnClickListener { exitSearchMode(); TabsSheet().show(supportFragmentManager, "tabs") }
 
@@ -437,6 +431,24 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
      * Leaves search mode explicitly: hides suggestions and the keyboard and parks focus on the
      * invisible holder so the framework cannot hand it back to the EditText.
      */
+    /** TEMPORARY (2.1.3, see BUGFIX_TABSSHEET_CRASH.md): shows the stack trace captured by BrowserApp's
+     *  exception handler after the previous process crashed, so the exact throwing frame can be reported
+     *  without adb. Purely observational - the trace file is consumed on display; the crash itself was
+     *  never altered. */
+    private fun showCrashTraceIfAny() {
+        val f = java.io.File(filesDir, "crash_trace.txt")
+        if (!f.exists()) return
+        val text = runCatching { f.readText() }.getOrDefault("")
+        runCatching { f.delete() }
+        if (text.isBlank()) return
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.crash_captured_title)
+            .setMessage(text.take(4000))
+            .setPositiveButton(android.R.string.ok, null)
+            .setOnDismissListener { runCatching { f.delete() } }
+            .show()
+    }
+
     private fun exitSearchMode() {
         suggestionPopup.dismiss()
         if (urlInput.hasFocus()) {
@@ -694,10 +706,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         backButton.alpha = if (backButton.isEnabled) 1f else 0.35f
         forwardButton.isEnabled = live && tab.canGoForward
         forwardButton.alpha = if (forwardButton.isEnabled) 1f else 0.35f
-        val hasPage = live && !tab.isStartPage
-        undoButton.alpha = if (hasPage || core.sessions.activeId?.let { core.tabs.hasRecentlyClosed(it) } == true) 1f else 0.35f
-        redoButton.isEnabled = hasPage
-        redoButton.alpha = if (hasPage) 1f else 0.35f
     }
 
     private fun updateTabCount() {
@@ -819,7 +827,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         toolbarHidden = hidden
         topBar.isVisible = !hidden && !inFullScreen
         updateIsolationBanner()
-        if (hidden) { if (!hud.isVisible) hud.setVisible(true); snack(getString(R.string.toolbar_hidden_hint)) }
+        hud.onFullscreenChanged(hidden)
+        if (hidden) snack(getString(R.string.toolbar_hidden_hint))
     }
 
     private fun pageScript(tab: Tab?, js: String) {
@@ -830,12 +839,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
 
     override fun hudBack() = goBack()
     override fun hudForward() = goForward()
-    override fun hudUndo() {
-        val t = currentTab
-        if (t != null && !t.isStartPage && t.geckoSession != null) pageScript(t, "document.execCommand('undo')")
-        else core.sessions.activeId?.let { sid -> core.tabs.reopenClosedTab(sid)?.let { showTab(it) } }
-    }
-    override fun hudRedo() { pageScript(currentTab, "document.execCommand('redo')") }
     override fun hudReload() { currentTab?.let { reload(it) } }
     override fun hudScrollTop() { pageScript(currentTab, "window.scrollTo({top:0,behavior:'smooth'})") }
     override fun hudScrollBottom() { pageScript(currentTab, "window.scrollTo({top:document.documentElement.scrollHeight,behavior:'smooth'})") }
