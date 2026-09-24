@@ -28,8 +28,8 @@ android {
         applicationId = "app.multisession.browser"
         minSdk = 28                 // Android 9 (Pie). GeckoView >= 144 itself needs 26.
         targetSdk = 35
-        versionCode = 11
-        versionName = "2.1.3"
+        versionCode = 12
+        versionName = "2.1.4"
         vectorDrawables.useSupportLibrary = true
     }
 
@@ -44,30 +44,39 @@ android {
         }
     }
 
-    // Release signing: uses a real keystore when the CI secrets / env vars are present,
-    // otherwise falls back to the debug key so the workflow always produces an installable APK.
+    // Release signing: uses the ONE stable keystore provided by the CI secrets / env vars. Every APK
+    // shipped by CI (debug AND release, both ABIs) must carry this single key: Android only allows an
+    // update to install over an existing app when both APKs have the IDENTICAL signer, so a per-build
+    // key would force users to uninstall before every update (INSTALL_FAILED_UPDATE_INCOMPATIBLE).
+    // CI fails the run when the keystore secret is missing AND re-verifies every built APK's certificate
+    // against signing/pinned-signer.sha256, so a drifting key can never ship. Local builds without the
+    // env vars fall back to the default debug key (dev-only, never released).
+    // See BUGFIX_UPDATE_SIGNATURE.md for the evidence that all pre-2.1.4 builds used throwaway keys.
     signingConfigs {
         create("release") {
             val ksPath = System.getenv("KEYSTORE_FILE")
             if (!ksPath.isNullOrBlank() && file(ksPath).exists()) {
                 storeFile = file(ksPath)
+                storeType = "PKCS12" // the stable key is a .p12; be explicit instead of relying on defaults
                 storePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
                 keyAlias = System.getenv("KEY_ALIAS") ?: ""
                 keyPassword = System.getenv("KEY_PASSWORD") ?: ""
             }
         }
     }
+    val releaseSigning = signingConfigs.getByName("release")
 
     buildTypes {
         release {
             // Shrinking stays off for the engine-migration release so the CI build is deterministic.
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            val release = signingConfigs.getByName("release")
-            signingConfig = if (release.storeFile != null) release else signingConfigs.getByName("debug")
+            signingConfig = if (releaseSigning.storeFile != null) releaseSigning else signingConfigs.getByName("debug")
         }
         debug {
             isMinifyEnabled = false
+            // Same stable key as release so a debug APK installs over a release install (and vice versa).
+            signingConfig = if (releaseSigning.storeFile != null) releaseSigning else signingConfigs.getByName("debug")
         }
     }
 

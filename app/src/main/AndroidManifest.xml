@@ -92,6 +92,12 @@
             android:label="@string/local_projects"
             android:parentActivityName=".ui.browser.BrowserActivity" />
 
+        <!-- Copy / Share actions of the crash-trace notification (CrashTraceNotifier). Explicit intents
+             only, therefore no intent-filter; exported=false keeps the receiver app-private. -->
+        <receiver
+            android:name=".ui.browser.CrashActionReceiver"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

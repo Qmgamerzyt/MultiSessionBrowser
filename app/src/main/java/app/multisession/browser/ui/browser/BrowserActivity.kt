@@ -182,7 +182,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_browser)
         bindViews()
-        showCrashTraceIfAny()
+        postCrashTraceIfAny()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { handleBack() }
         })
@@ -431,22 +431,22 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
      * Leaves search mode explicitly: hides suggestions and the keyboard and parks focus on the
      * invisible holder so the framework cannot hand it back to the EditText.
      */
-    /** TEMPORARY (2.1.3, see BUGFIX_TABSSHEET_CRASH.md): shows the stack trace captured by BrowserApp's
-     *  exception handler after the previous process crashed, so the exact throwing frame can be reported
-     *  without adb. Purely observational - the trace file is consumed on display; the crash itself was
-     *  never altered. */
-    private fun showCrashTraceIfAny() {
+    /** TEMPORARY (2.1.4, see BUGFIX_TABSSHEET_CRASH.md): posts the stack trace captured by BrowserApp's
+     *  exception handler after the previous process crashed as a notification with Copy/Share actions,
+     *  so the exact throwing frame can be reported without adb. Purely observational - the trace file
+     *  is consumed once Android accepts the notification (the old dialog consumed it on display); the
+     *  crash itself was never altered. If notifications are blocked or the permission is denied, the
+     *  file is kept and posting is retried on the next launch (never a dialog). */
+    private fun postCrashTraceIfAny() {
         val f = java.io.File(filesDir, "crash_trace.txt")
         if (!f.exists()) return
         val text = runCatching { f.readText() }.getOrDefault("")
-        runCatching { f.delete() }
-        if (text.isBlank()) return
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.crash_captured_title)
-            .setMessage(text.take(4000))
-            .setPositiveButton(android.R.string.ok, null)
-            .setOnDismissListener { runCatching { f.delete() } }
-            .show()
+        if (text.isBlank()) { runCatching { f.delete() }; return }
+        fun tryPost() {
+            if (CrashTraceNotifier.post(this, text)) runCatching { f.delete() }
+        }
+        if (hasPermission(Manifest.permission.POST_NOTIFICATIONS)) tryPost()
+        else requestAndroidPermissions(listOf(Manifest.permission.POST_NOTIFICATIONS)) { tryPost() }
     }
 
     private fun exitSearchMode() {
