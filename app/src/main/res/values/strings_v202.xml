@@ -48,7 +48,8 @@
     <string name="hud_item_closetab">Close tab</string>
     <string name="hud_item_find">Find in page</string>
     <string name="hud_item_hide">Hide HUD</string>
-    <string name="toolbar_hidden_hint">Toolbar hidden. Use the HUD or press Back to show it again.</string>
+    <string name="hud_exit_fullscreen">Exit fullscreen</string>
+    <string name="toolbar_hidden_hint">Toolbar hidden. Tap the floating button or press Back to show it again.</string>
     <string name="find_in_page">Find in page</string>
     <string name="find_hint">Text to find</string>
     <string name="find_next">Next</string>

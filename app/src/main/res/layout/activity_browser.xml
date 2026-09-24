@@ -188,8 +188,9 @@
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
                     android:visibility="gone" />
-                <!-- Fullscreen control nub: small draggable button on the right edge while the toolbar is hidden;
-                     tapping it reveals the full HUD option set. Populated/controlled by HudController. -->
+                <!-- Floating close-fullscreen button: small draggable button on the right edge while the
+                     toolbar is hidden; tapping it exits fullscreen, and it disappears with fullscreen mode.
+                     Populated/controlled by HudController. -->
                 <ImageButton
                     android:id="@+id/hudNub"
                     android:layout_width="44dp"
@@ -197,9 +198,9 @@
                     android:layout_gravity="center_vertical|end"
                     android:layout_marginEnd="10dp"
                     android:background="@drawable/bg_hud"
-                    android:contentDescription="@string/hud_show"
+                    android:contentDescription="@string/hud_exit_fullscreen"
                     android:elevation="6dp"
-                    android:src="@drawable/ic_hud"
+                    android:src="@drawable/ic_close"
                     android:visibility="gone"
                     app:tint="?attr/colorOnSurface" />
                 <!-- Compact selectable HUD (floating pill, never covers the page). Populated by HudController. -->

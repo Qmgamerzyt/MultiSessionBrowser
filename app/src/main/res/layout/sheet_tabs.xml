@@ -104,13 +104,13 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal">
-                <Button android:id="@+id/bulkSelectAll" style="@style/Widget.Material3.Button.TextButton" android:text="@string/select_all" />
-                <Button android:id="@+id/bulkClose" style="@style/Widget.Material3.Button.TextButton" android:text="@string/close_tab" />
-                <Button android:id="@+id/bulkMove" style="@style/Widget.Material3.Button.TextButton" android:text="@string/move_selected" />
-                <Button android:id="@+id/bulkGroup" style="@style/Widget.Material3.Button.TextButton" android:text="@string/group_selected" />
-                <Button android:id="@+id/bulkUngroup" style="@style/Widget.Material3.Button.TextButton" android:text="@string/ungroup_selected" />
-                <Button android:id="@+id/bulkArchive" style="@style/Widget.Material3.Button.TextButton" android:text="@string/archive" />
-                <Button android:id="@+id/bulkPin" style="@style/Widget.Material3.Button.TextButton" android:text="@string/pin" />
+                <Button android:id="@+id/bulkSelectAll" style="@style/Widget.Material3.Button.TextButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/select_all" />
+                <Button android:id="@+id/bulkClose" style="@style/Widget.Material3.Button.TextButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/close_tab" />
+                <Button android:id="@+id/bulkMove" style="@style/Widget.Material3.Button.TextButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/move_selected" />
+                <Button android:id="@+id/bulkGroup" style="@style/Widget.Material3.Button.TextButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/group_selected" />
+                <Button android:id="@+id/bulkUngroup" style="@style/Widget.Material3.Button.TextButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/ungroup_selected" />
+                <Button android:id="@+id/bulkArchive" style="@style/Widget.Material3.Button.TextButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/archive" />
+                <Button android:id="@+id/bulkPin" style="@style/Widget.Material3.Button.TextButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/pin" />
             </LinearLayout>
         </HorizontalScrollView>
         <ImageButton

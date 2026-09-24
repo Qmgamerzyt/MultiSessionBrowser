@@ -806,8 +806,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         entry(R.drawable.ic_search, R.string.find_in_page, enabled = hasPage) { hudFind() }
         entry(R.drawable.ic_desktop, R.string.desktop_site, enabled = hasPage, checked = tab?.desktopMode == true) { tab?.let { toggleDesktop(it) } }
         entry(R.drawable.ic_lock, R.string.site_permissions, enabled = hasPage) { tab?.let { openSitePermissions(it) } }
-        entry(R.drawable.ic_hud, R.string.hud_show, checked = hud.isVisible) { hud.setVisible(!hud.isVisible) }
-        entry(R.drawable.ic_tune, R.string.hud_customize) { hud.customize() }
         entry(R.drawable.ic_fullscreen, if (toolbarHidden) R.string.toolbar_show else R.string.hud_item_fullscreen) { setToolbarHidden(!toolbarHidden) }
         entry(R.drawable.ic_star, R.string.bookmarks) { openUrlLauncher.launch(Intent(this, BookmarksActivity::class.java)) }
         entry(R.drawable.ic_history, R.string.history) { openUrlLauncher.launch(Intent(this, HistoryActivity::class.java)) }

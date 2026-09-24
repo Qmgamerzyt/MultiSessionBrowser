@@ -75,4 +75,62 @@ stack trace**.
 * **New:** fullscreen nub — while the toolbar is hidden, a small draggable button sits on the right
   edge; tapping it reveals the full original HUD option set (back/forward/reload/top/bottom/
   desktop/fullscreen/newtab/closetab/find) — nothing in the full set is duplicated while the
-  toolbar is hidden.
+  toolbar is hidden. *(Superseded in 2.1.5 — see the resolution below: the nub is now a plain
+  floating close-fullscreen button.)*
+
+## Resolution — runtime trace delivered, root cause proven, fixed in 2.1.5 (versionCode 13)
+
+The trace was captured by the 2.1.3 handler and delivered by the 2.1.4 "Crash captured"
+notification (Copy button), e.g. `time=2026-09-24 15:02:54.627`:
+
+```
+android.view.InflateException: Binary XML file line #107: You must supply a layout_width attribute.
+  at android.view.LayoutInflater.inflate(LayoutInflater.java:423)
+  ...
+  at app.multisession.browser.ui.tabs.TabsSheet.onCreateView(TabsSheet.kt:99)
+--- cause ---
+java.lang.UnsupportedOperationException: Binary XML file line #107: You must supply a layout_width attribute.
+  at android.content.res.TypedArray.getLayoutDimension(TypedArray.java:779)
+  at android.view.ViewGroup$LayoutParams.setBaseAttributes(ViewGroup.java:7870)
+  at android.view.ViewGroup$MarginLayoutParams.<init>(ViewGroup.java:8062)
+  at android.widget.LinearLayout$LayoutParams.<init>(LinearLayout.java:1997)
+  at android.widget.LinearLayout.generateLayoutParams(LinearLayout.java:1895)
+  at android.widget.LayoutInflater.rInflate(LayoutInflater.java:882)
+```
+
+**Root cause (a plain XML defect — NOT device/API/runtime dependent):**
+
+* `TabsSheet.kt:99` inflates `res/layout/sheet_tabs.xml`.
+* Line **107** of that file is `<Button android:id="@+id/bulkSelectAll" style="@style/Widget.Material3.Button.TextButton" …>`
+  — and **all seven bulk-selection buttons (lines 107–113) declare neither `android:layout_width`
+  nor `android:layout_height`.**
+* `LinearLayout.generateLayoutParams(attrs)` reads those attributes from a `TypedArray` that also
+  consults the element's `style=`, but the Material `Widget.Material3.Button.TextButton` style
+  supplies no `layout_width`/`layout_height` → `getLayoutDimension()` throws. The stack's four
+  `rInflate` frames match the file nesting exactly: sheet root → `selectionBar` (LinearLayout) →
+  `HorizontalScrollView` → inner `LinearLayout` → `Button` at line 107.
+* The selection bar carries `android:visibility="gone"`, but `LayoutInflater` inflates every
+  element regardless of visibility — so opening the tabs sheet threw **every time, on every
+  device**. The 22-check static investigation missed it because it checked code/IDs/strings/format
+  specifiers, not raw `layout_*` attributes on leaf elements.
+* Every other element in the file (and, by a full audit of every element in `res/layout*/`, in the
+  whole app) either declares `layout_*` explicitly or receives them from a repo-local style
+  (`@style/CompactBarButton`, `@style/SectionTitle` both define `layout_width`/`layout_height`) —
+  the seven `TextButton`s were the only genuine offenders in the app.
+
+**Fix:** the seven buttons now declare `android:layout_width="wrap_content"` and
+`android:layout_height="wrap_content"` (standard TextButton row sizing inside the horizontal
+`LinearLayout`). No try/catch, no defensive wrapper — the exact throwing frame no longer exists.
+
+**Timeline correction:** the plan above said "2.1.4 fixes the frame" — in reality 2.1.4 shipped the
+stable signing key + the Copy/Share notification (it is what *delivered* this trace); the frame fix
+itself lands in **2.1.5**.
+
+## Also in 2.1.5 (user-requested UI changes)
+
+* **"Show HUD" and "Customize HUD…" drawer-menu entries removed completely** — both `entry(...)`
+  lines in `BrowserActivity.renderMenu()` are gone; the HUD pill remains, unchanged.
+* **Fullscreen close:** the nub is now a plain floating **close-fullscreen button** (44dp, `ic_close`)
+  shown only while the toolbar is hidden; a tap exits fullscreen via `Actions.hudToggleToolbar()`,
+  and the button disappears as fullscreen ends. The nub-popup path (`popupOpen`/`togglePopup`/
+  `collapsePopup`) was removed along with it.

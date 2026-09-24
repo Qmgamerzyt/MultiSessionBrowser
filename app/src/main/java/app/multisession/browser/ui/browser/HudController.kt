@@ -13,13 +13,14 @@ import app.multisession.browser.core.Prefs
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
 /**
- * Compact, selectable HUD: a floating pill (40dp high) with the controls the user picked, shown over the bottom-right
- * corner of the page. It never covers more than one row of icons, can be dragged vertically, and keeps working when
- * the toolbar is hidden ("fullscreen" item) - the case where sites hide behind the normal chrome.
+ * Compact HUD: a floating pill (40dp high) with the HUD controls, shown over the bottom-right
+ * corner of the page. It never covers more than one row of icons and can be dragged vertically.
  *
- * While the toolbar is hidden (fullscreen), the always-on pill is replaced by a small draggable nub ([nub]);
- * tapping the nub opens the pill with the FULL original option set (the toolbar/menu are hidden there, so none
- * of those actions are duplicated). Outside fullscreen the pill only offers [Prefs.DEFAULT_HUD_KEYS].
+ * While the toolbar is hidden ("fullscreen" item), the pill is replaced by a small floating
+ * close-fullscreen button ([nub]): tapping it exits fullscreen again (the toolbar/menu are hidden
+ * there), and the button disappears together with fullscreen mode. The pill's own hide control is
+ * session-only, because the menu no longer offers a "Show HUD" toggle - hiding must never be able
+ * to lock the HUD away for good.
  */
 class HudController(private val bar: LinearLayout, private val nub: View, private val actions: Actions) {
 
@@ -47,12 +48,11 @@ class HudController(private val bar: LinearLayout, private val nub: View, privat
     /** The customizable subset of [allItems] (toolbar/menu duplicates excluded - bug fix). */
     private val customItems = allItems.filter { it.key in Prefs.DEFAULT_HUD_KEYS }
 
-    /** True while the pill was opened from the fullscreen nub: show the full option set. */
-    private var popupOpen = false
-
     init {
         rebuild()
-        bar.isVisible = Prefs.hudVisible
+        // Always start visible: the menu's "Show HUD" toggle is gone, so a stored `false` from an
+        // older version must not be able to lock the pill away permanently.
+        bar.isVisible = true
         nub.isVisible = false
         makeDraggable()
         makeNubDraggable()
@@ -65,29 +65,17 @@ class HudController(private val bar: LinearLayout, private val nub: View, privat
 
     val isVisible: Boolean get() = bar.isVisible
 
-    /** Called by BrowserActivity.setToolbarHidden: in fullscreen the nub replaces the always-on pill. */
+    /** Called by BrowserActivity.setToolbarHidden: in fullscreen the floating close button
+     *  replaces the pill; leaving fullscreen brings the pill back. */
     fun onFullscreenChanged(hidden: Boolean) {
-        popupOpen = false
         nub.isVisible = hidden
         rebuild()
-        bar.isVisible = if (hidden) false else Prefs.hudVisible
-    }
-
-    /** Nub tap: reveal/hide the pill with the full HUD option set. */
-    private fun togglePopup() {
-        if (popupOpen) collapsePopup()
-        else { popupOpen = true; rebuild(); bar.isVisible = true }
-    }
-
-    private fun collapsePopup() {
-        popupOpen = false
-        bar.isVisible = false
-        rebuild()
+        bar.isVisible = !hidden
     }
 
     fun rebuild() {
         bar.removeAllViews()
-        val keys = if (popupOpen) allItems.map { it.key } else Prefs.hudItems
+        val keys = Prefs.hudItems
         val size = (36 * bar.resources.displayMetrics.density).toInt()
         keys.mapNotNull { k -> allItems.firstOrNull { it.key == k } }.forEach { item ->
             val b = ImageButton(bar.context).apply {
@@ -103,13 +91,15 @@ class HudController(private val bar: LinearLayout, private val nub: View, privat
             }
             bar.addView(b)
         }
-        // A hide/collapse control is always present so the HUD can never get stuck on screen.
+        // A hide control is always present so the HUD can never get stuck on screen. It only hides
+        // for this session (not persisted): with the menu toggle gone, a persisted hide would have
+        // no way back - the pill returns on the next launch or after leaving fullscreen.
         bar.addView(ImageButton(bar.context).apply {
             layoutParams = LinearLayout.LayoutParams(size, size)
             setImageResource(R.drawable.ic_expand_more)
             setColorFilter(0xFFBBBBBB.toInt()); background = null
             contentDescription = bar.context.getString(R.string.hud_item_hide)
-            setOnClickListener { if (popupOpen) collapsePopup() else setVisible(false) }
+            setOnClickListener { bar.isVisible = false }
         })
     }
 
@@ -151,8 +141,8 @@ class HudController(private val bar: LinearLayout, private val nub: View, privat
         }
     }
 
-    /** Fullscreen nub: freely draggable in both axes (clamped inside the container); a tap without
-     *  dragging toggles the full HUD option set. */
+    /** Floating close-fullscreen button: freely draggable in both axes (clamped inside the
+     *  container); a tap without dragging exits fullscreen via [Actions.hudToggleToolbar]. */
     @SuppressLint("ClickableViewAccessibility")
     private fun makeNubDraggable() {
         var sx = 0f; var sy = 0f; var tx = 0f; var ty = 0f; var moved = false
@@ -171,7 +161,7 @@ class HudController(private val bar: LinearLayout, private val nub: View, privat
                     v.translationY = (ty + dy).coerceIn(minTy, maxOf(minTy, maxTy))
                     true
                 }
-                MotionEvent.ACTION_UP -> { if (!moved) togglePopup(); true }
+                MotionEvent.ACTION_UP -> { if (!moved) actions.hudToggleToolbar(); true }
                 else -> moved
             }
         }

@@ -28,8 +28,8 @@ android {
         applicationId = "app.multisession.browser"
         minSdk = 28                 // Android 9 (Pie). GeckoView >= 144 itself needs 26.
         targetSdk = 35
-        versionCode = 12
-        versionName = "2.1.4"
+        versionCode = 13
+        versionName = "2.1.5"
         vectorDrawables.useSupportLibrary = true
     }
 
