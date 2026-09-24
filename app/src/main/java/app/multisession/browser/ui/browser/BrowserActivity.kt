@@ -56,8 +56,10 @@ import app.multisession.browser.downloads.DownloadStatus
 import app.multisession.browser.engine.BrowserHost
 import app.multisession.browser.engine.SessionFactory
 import app.multisession.browser.engine.WebNotifications
+import app.multisession.browser.extensions.AmoApi
 import app.multisession.browser.extensions.ExtensionAction
 import app.multisession.browser.extensions.ExtensionHost
+import app.multisession.browser.extensions.installErrorMessage
 import app.multisession.browser.permissions.PermissionValue
 import app.multisession.browser.permissions.SitePermissionStore
 import app.multisession.browser.permissions.SitePermissionType
@@ -129,7 +131,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     private lateinit var backButton: ImageButton
     private lateinit var forwardButton: ImageButton
     private lateinit var tabCountView: TextView
-    private lateinit var fullscreenContainer: FrameLayout
     private lateinit var sessionsDrawerView: View
     private lateinit var menuDrawerView: View
     private lateinit var sessionsDrawer: SessionsDrawer
@@ -145,6 +146,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     private var inFullScreen = false
     /** Toolbar hidden by the HUD "fullscreen" item (not HTML5 fullscreen). */
     private var toolbarHidden = false
+    /** Mirrors the applied system-bar state so [applySystemBars] only talks to the window on change. */
+    private var systemBarsHidden = false
     private lateinit var suggestionPopup: SuggestionPopup
 
     private var fileResultCallback: ((Array<Uri>?) -> Unit)? = null
@@ -193,7 +196,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
             core.tabs.addListener(this@BrowserActivity)
             core.tabs.host = this@BrowserActivity
             core.extensions.host = this@BrowserActivity
-            updateIsolationBanner()
+            applyChrome()
             showActiveSessionTab()
             handleIntent(intent)
             launch {
@@ -304,7 +307,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         backButton = findViewById(R.id.backButton)
         forwardButton = findViewById(R.id.forwardButton)
         tabCountView = findViewById(R.id.tabCount)
-        fullscreenContainer = findViewById(R.id.fullscreenContainer)
         sessionsDrawerView = findViewById(R.id.sessionsDrawer)
         menuDrawerView = findViewById(R.id.menuDrawer)
         sessionsDrawer = SessionsDrawer(this, core, sessionsDrawerView)
@@ -533,7 +535,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
             core.sessions.switchTo(sessionId) ?: return@launch
             currentTabId = null
             showActiveSessionTab()
-            updateIsolationBanner()
+            applyChrome()
         }
     }
 
@@ -656,13 +658,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         val tab = currentTab
         when {
             drawerLayout.isDrawerOpen(sessionsDrawerView) || drawerLayout.isDrawerOpen(menuDrawerView) -> drawerLayout.closeDrawers()
-            inFullScreen -> {
-                val gs = tab?.geckoSession
-                if (gs != null) gs.exitFullScreen()          // Gecko answers with onFullScreen(false)
-                else if (tab != null) onFullScreenChanged(tab, false)
-                else inFullScreen = false
-            }
-            toolbarHidden -> setToolbarHidden(false)
+            // Both fullscreen flavours leave through the same synchronous path (see exitFullscreen).
+            anyFullScreen -> exitFullscreen()
             urlInput.hasFocus() -> exitSearchMode()
             tab?.geckoSession != null && tab.canGoBack -> goBack()
             tab?.openerTabId != null -> closeTab(tab)
@@ -699,13 +696,14 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         )
         reloadStopButton.setImageResource(if (tab.isLoading) R.drawable.ic_close else R.drawable.ic_refresh)
         reloadStopButton.contentDescription = getString(if (tab.isLoading) R.string.stop else R.string.reload)
-        progressBar.isVisible = tab.isLoading && tab.progress < 100 && !inFullScreen
         progressBar.progress = tab.progress
         val live = tab.geckoSession != null
         backButton.isEnabled = live && tab.canGoBack
         backButton.alpha = if (backButton.isEnabled) 1f else 0.35f
         forwardButton.isEnabled = live && tab.canGoForward
         forwardButton.alpha = if (forwardButton.isEnabled) 1f else 0.35f
+        // Visibility of every chrome surface is derived here, never set field-by-field elsewhere.
+        applyChrome()
     }
 
     private fun updateTabCount() {
@@ -812,6 +810,11 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         val active = core.downloads.activeCount
         entry(R.drawable.ic_download, R.string.downloads, badge = if (active > 0) active.toString() else null) { openUrlLauncher.launch(Intent(this, DownloadsActivity::class.java)) }
         entry(R.drawable.ic_extension, R.string.extensions, badge = core.extensions.extensions.value.size.takeIf { it > 0 }?.toString()) { openUrlLauncher.launch(Intent(this, ExtensionsActivity::class.java)) }
+        // AMO add-on page: the site's own install button needs navigator.mozAddonManager, which
+        // GeckoView only exposes under narrow conditions - offer the install straight from the API.
+        AmoApi.slugFromPage(tab?.url)?.let { slug ->
+            entry(R.drawable.ic_extension, R.string.ext_amo_install_page) { installAmoFromPage(slug) }
+        }
         entry(R.drawable.ic_folder, R.string.local_projects) { openUrlLauncher.launch(Intent(this, ProjectsActivity::class.java)) }
         entry(R.drawable.ic_delete, R.string.clear_site_data) { confirmClearSessionData() }
         entry(R.drawable.ic_tune, R.string.settings) { startActivity(Intent(this, SettingsActivity::class.java)) }
@@ -823,10 +826,56 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     /** HUD "fullscreen": hide the whole toolbar so the page gets the full screen; HUD stays usable. */
     private fun setToolbarHidden(hidden: Boolean) {
         toolbarHidden = hidden
-        topBar.isVisible = !hidden && !inFullScreen
-        updateIsolationBanner()
-        hud.onFullscreenChanged(hidden)
+        applyChrome()
         if (hidden) snack(getString(R.string.toolbar_hidden_hint))
+    }
+
+    /** True while any chrome-hiding mode is active: the HUD's toolbar-hidden mode or HTML5 fullscreen. */
+    private val anyFullScreen: Boolean get() = toolbarHidden || inFullScreen
+
+    /**
+     * The ONLY place that decides chrome visibility. The toolbar, isolation banner, progress bar,
+     * HUD pill and floating close button all derive from [toolbarHidden] + [inFullScreen] + the
+     * current tab, so entering/leaving fullscreen or switching tabs can never leave a surface stale
+     * (v2.1.6: each surface used to be set from a different code path with slightly different
+     * conditions, which is how the toolbar could stay hidden after leaving fullscreen).
+     * Idempotent and cheap - safe to call on every progress tick.
+     */
+    private fun applyChrome() {
+        val hidden = anyFullScreen
+        val tab = currentTab
+        topBar.isVisible = !hidden
+        updateIsolationBanner()
+        progressBar.isVisible = !hidden && tab != null && tab.isLoading && tab.progress < 100
+        hud.onChromeChanged(hidden)
+        applySystemBars(inFullScreen)
+    }
+
+    /**
+     * Leaves EVERY fullscreen mode at once: clears both flags synchronously (so the chrome comes back
+     * even if Gecko's reply is late or dropped) and asks Gecko to leave HTML5 fullscreen, whose later
+     * `onFullScreen(false)` answer simply re-applies the same state.
+     */
+    private fun exitFullscreen() {
+        val wasFull = inFullScreen
+        toolbarHidden = false
+        inFullScreen = false
+        if (wasFull) currentTab?.geckoSession?.exitFullScreen()
+        applyChrome()
+    }
+
+    /** System bars follow HTML5 fullscreen only (the HUD's toolbar-hidden mode keeps them - existing
+     *  behavior). The state cache keeps [applyChrome] free of window churn on the progress-tick path. */
+    private fun applySystemBars(hide: Boolean) {
+        if (hide == systemBarsHidden) return
+        systemBarsHidden = hide
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        if (hide) {
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
     }
 
     private fun pageScript(tab: Tab?, js: String) {
@@ -842,6 +891,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     override fun hudScrollBottom() { pageScript(currentTab, "window.scrollTo({top:document.documentElement.scrollHeight,behavior:'smooth'})") }
     override fun hudDesktop() { currentTab?.let { toggleDesktop(it) } }
     override fun hudToggleToolbar() { setToolbarHidden(!toolbarHidden) }
+    /** Floating close button: leave every fullscreen flavour at once (toolbar-hidden AND HTML5). */
+    override fun hudExitFullscreen() = exitFullscreen()
     override fun hudNewTab() = newTab()
     override fun hudCloseTab() { currentTab?.let { closeTab(it) } }
     override fun hudFind() {
@@ -1001,6 +1052,36 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
 
     override fun onExtensionOpenOptions(ext: WebExtension, url: String) = openUrl(url, newTab = true)
 
+    /** An install started outside the Extensions screen (an `.xpi` link tapped in a page, or an AMO
+     *  add-on page) finished. */
+    override fun onExtensionInstallResult(r: Result<WebExtension>) = reportExtensionInstall(r)
+
+    private fun reportExtensionInstall(r: Result<WebExtension>) {
+        r.onSuccess { snack(getString(R.string.ext_installed, it.metaData.name ?: it.id)) }
+            .onFailure { AppLog.w(TAG, "extension install failed", it); snack(getString(R.string.ext_install_failed, installErrorMessage(this, it))) }
+    }
+
+    /**
+     * AMO add-on page -> install through the official API. The site's own button relies on
+     * `navigator.mozAddonManager`, which GeckoView only exposes on addons.mozilla.org top-level
+     * content under additional conditions (see docs/EXTENSIONS.md), so it can render disabled here.
+     * The .xpi still goes through Gecko's normal install path: signature validation is untouched.
+     */
+    private fun installAmoFromPage(slug: String) {
+        lifecycleScope.launch {
+            val res = runCatching { withContext(Dispatchers.IO) { AmoApi.detail(slug) } }
+            if (isFinishing || isDestroyed) return@launch
+            val url = res.getOrNull()?.xpiUrl
+            if (url.isNullOrBlank()) {
+                val err = res.exceptionOrNull()
+                if (err != null) AppLog.w(TAG, "AMO lookup failed for $slug", err) else AppLog.w(TAG, "AMO has no Android .xpi for $slug")
+                snack(getString(R.string.ext_amo_error))
+                return@launch
+            }
+            core.extensions.install(url) { r -> reportExtensionInstall(r) }
+        }
+    }
+
     // ================================================================== BrowserHost
 
     override fun onTabOpenedByPage(tab: Tab) = showTab(tab)
@@ -1029,18 +1110,11 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     }
 
     override fun onFullScreenChanged(tab: Tab, fullScreen: Boolean) {
-        if (tab.id != currentTabId) return
-        inFullScreen = fullScreen
-        topBar.isVisible = !fullScreen && !toolbarHidden
-        updateIsolationBanner()
-        progressBar.isVisible = !fullScreen && tab.isLoading && tab.progress < 100
-        val controller = WindowInsetsControllerCompat(window, window.decorView)
-        if (fullScreen) {
-            controller.hide(WindowInsetsCompat.Type.systemBars())
-            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        } else {
-            controller.show(WindowInsetsCompat.Type.systemBars())
-        }
+        // Strand-proof: only the tab on screen may drive chrome. A reply arriving after the user
+        // switched tabs (or while currentTabId is briefly null) evaluates to false instead of being
+        // dropped - dropped replies are what used to leave the toolbar hidden for good.
+        inFullScreen = fullScreen && tab.id == currentTabId
+        applyChrome()
     }
 
     // ---- file upload -------------------------------------------------------------------------

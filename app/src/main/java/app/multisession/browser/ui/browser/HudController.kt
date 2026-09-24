@@ -10,17 +10,16 @@ import android.widget.LinearLayout
 import androidx.core.view.isVisible
 import app.multisession.browser.R
 import app.multisession.browser.core.Prefs
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
 /**
  * Compact HUD: a floating pill (40dp high) with the HUD controls, shown over the bottom-right
  * corner of the page. It never covers more than one row of icons and can be dragged vertically.
  *
- * While the toolbar is hidden ("fullscreen" item), the pill is replaced by a small floating
- * close-fullscreen button ([nub]): tapping it exits fullscreen again (the toolbar/menu are hidden
- * there), and the button disappears together with fullscreen mode. The pill's own hide control is
- * session-only, because the menu no longer offers a "Show HUD" toggle - hiding must never be able
- * to lock the HUD away for good.
+ * The class keeps no chrome-visibility logic of its own: `BrowserActivity.applyChrome()` derives
+ * whether the pill or the close-fullscreen button ([nub]) shows from the toolbar-hidden and HTML5
+ * fullscreen flags and pushes it here through [onChromeChanged]. A pill the user hid this session
+ * stays hidden ([pillHidden]) - it is never force-shown again by leaving fullscreen, and it is never
+ * persisted, so the next launch always starts with the pill visible.
  */
 class HudController(private val bar: LinearLayout, private val nub: View, private val actions: Actions) {
 
@@ -28,6 +27,8 @@ class HudController(private val bar: LinearLayout, private val nub: View, privat
         fun hudBack(); fun hudForward(); fun hudReload()
         fun hudScrollTop(); fun hudScrollBottom(); fun hudDesktop(); fun hudToggleToolbar()
         fun hudNewTab(); fun hudCloseTab(); fun hudFind()
+        /** Leave every fullscreen flavour at once (toolbar-hidden and HTML5 fullscreen). */
+        fun hudExitFullscreen()
     }
 
     class Item(val key: String, val labelRes: Int, val iconRes: Int, val run: (Actions) -> Unit)
@@ -45,32 +46,28 @@ class HudController(private val bar: LinearLayout, private val nub: View, privat
         Item("find", R.string.hud_item_find, R.drawable.ic_search) { it.hudFind() },
     )
 
-    /** The customizable subset of [allItems] (toolbar/menu duplicates excluded - bug fix). */
-    private val customItems = allItems.filter { it.key in Prefs.DEFAULT_HUD_KEYS }
+    /** Session-only hide chosen by the user with the pill's own control (never persisted: with the
+     *  menu toggle gone, a persisted hide would have no way back). */
+    private var pillHidden = false
 
     init {
         rebuild()
-        // Always start visible: the menu's "Show HUD" toggle is gone, so a stored `false` from an
-        // older version must not be able to lock the pill away permanently.
+        // Always start visible: nothing is persisted, so the pill can never be locked away.
+        pillHidden = false
         bar.isVisible = true
         nub.isVisible = false
         makeDraggable()
         makeNubDraggable()
     }
 
-    fun setVisible(visible: Boolean) {
-        Prefs.hudVisible = visible
-        bar.isVisible = visible
-    }
-
-    val isVisible: Boolean get() = bar.isVisible
-
-    /** Called by BrowserActivity.setToolbarHidden: in fullscreen the floating close button
-     *  replaces the pill; leaving fullscreen brings the pill back. */
-    fun onFullscreenChanged(hidden: Boolean) {
+    /**
+     * Called from `BrowserActivity.applyChrome()` whenever the chrome-hidden state changes: the
+     * floating close-fullscreen button replaces the pill while the toolbar is hidden or a page is
+     * in HTML5 fullscreen, and both go away together. A pill hidden this session stays hidden.
+     */
+    fun onChromeChanged(hidden: Boolean) {
         nub.isVisible = hidden
-        rebuild()
-        bar.isVisible = !hidden
+        bar.isVisible = !hidden && !pillHidden
     }
 
     fun rebuild() {
@@ -93,33 +90,14 @@ class HudController(private val bar: LinearLayout, private val nub: View, privat
         }
         // A hide control is always present so the HUD can never get stuck on screen. It only hides
         // for this session (not persisted): with the menu toggle gone, a persisted hide would have
-        // no way back - the pill returns on the next launch or after leaving fullscreen.
+        // no way back - the pill returns on the next launch, but NOT merely by leaving fullscreen.
         bar.addView(ImageButton(bar.context).apply {
             layoutParams = LinearLayout.LayoutParams(size, size)
             setImageResource(R.drawable.ic_expand_more)
             setColorFilter(0xFFBBBBBB.toInt()); background = null
             contentDescription = bar.context.getString(R.string.hud_item_hide)
-            setOnClickListener { bar.isVisible = false }
+            setOnClickListener { pillHidden = true; bar.isVisible = false }
         })
-    }
-
-    /** Checkbox dialog to choose + order the HUD items (order = order of the list).
-     *  Only the de-duplicated [customItems] are offered - toolbar/menu actions are not listed. */
-    fun customize() {
-        val current = Prefs.hudItems
-        val labels = customItems.map { bar.context.getString(it.labelRes) }.toTypedArray()
-        val checked = BooleanArray(customItems.size) { current.contains(customItems[it].key) }
-        MaterialAlertDialogBuilder(bar.context)
-            .setTitle(R.string.hud_title)
-            .setMultiChoiceItems(labels, checked) { _, i, v -> checked[i] = v }
-            .setPositiveButton(R.string.save) { _, _ ->
-                val chosen = customItems.filterIndexed { i, _ -> checked[i] }.map { it.key }
-                Prefs.hudItems = chosen.ifEmpty { Prefs.DEFAULT_HUD_KEYS }
-                rebuild()
-                setVisible(true)
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -142,7 +120,7 @@ class HudController(private val bar: LinearLayout, private val nub: View, privat
     }
 
     /** Floating close-fullscreen button: freely draggable in both axes (clamped inside the
-     *  container); a tap without dragging exits fullscreen via [Actions.hudToggleToolbar]. */
+     *  container); a tap without dragging exits fullscreen via [Actions.hudExitFullscreen]. */
     @SuppressLint("ClickableViewAccessibility")
     private fun makeNubDraggable() {
         var sx = 0f; var sy = 0f; var tx = 0f; var ty = 0f; var moved = false
@@ -161,7 +139,7 @@ class HudController(private val bar: LinearLayout, private val nub: View, privat
                     v.translationY = (ty + dy).coerceIn(minTy, maxOf(minTy, maxTy))
                     true
                 }
-                MotionEvent.ACTION_UP -> { if (!moved) actions.hudToggleToolbar(); true }
+                MotionEvent.ACTION_UP -> { if (!moved) actions.hudExitFullscreen(); true }
                 else -> moved
             }
         }

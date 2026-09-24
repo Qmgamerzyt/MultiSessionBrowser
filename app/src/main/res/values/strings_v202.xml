@@ -32,7 +32,6 @@
     <string name="perm_label_desktop_site">Desktop site (always)</string>
     <string name="menu_app">Browser menu</string>
     <string name="hud_show">Show HUD</string>
-    <string name="hud_customize">Customize HUD…</string>
     <string name="hud_title">HUD controls</string>
     <string name="hud_hint">Pick the controls of the floating bar. Drag the bar up or down to move it.</string>
     <string name="hud_item_back">Back</string>

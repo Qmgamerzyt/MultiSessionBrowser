@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v2.1.6: localized extension-install failure reasons (shared by every install surface) and the
+     addons.mozilla.org browse / private-browsing toggle UI. -->
+<resources>
+    <!-- Gecko WebExtension.InstallException error codes -->
+    <string name="ext_err_network">network failure</string>
+    <string name="ext_err_hash">the downloaded file did not match Mozilla’s signature (changed in transit)</string>
+    <string name="ext_err_corrupt">the file is corrupt</string>
+    <string name="ext_err_file">could not read the file</string>
+    <string name="ext_err_unsigned">not signed by Mozilla (unsigned extensions cannot be installed)</string>
+    <string name="ext_err_type">unexpected add-on type</string>
+    <string name="ext_err_version">unexpected add-on version</string>
+    <string name="ext_err_id">incorrect add-on id</string>
+    <string name="ext_err_domain">invalid domain</string>
+    <string name="ext_err_blocked">blocked by Mozilla (blocklisted)</string>
+    <string name="ext_err_incompatible">not compatible with this browser version</string>
+    <string name="ext_err_unsupported">unsupported add-on type</string>
+    <string name="ext_err_admin">this add-on can only be installed by an administrator</string>
+    <string name="ext_err_softblocked">blocked for security reasons</string>
+    <string name="ext_err_canceled">cancelled</string>
+    <string name="ext_err_postponed">postponed</string>
+    <string name="ext_err_code">error %1$d</string>
+
+    <!-- AMO browse (installed from the official API; Gecko still validates every signature) -->
+    <string name="ext_amo_find">Find add-ons</string>
+    <string name="ext_amo_hint">Search addons.mozilla.org</string>
+    <string name="ext_amo_search">Search</string>
+    <string name="ext_amo_empty">No add-ons found.</string>
+    <string name="ext_amo_error">Could not reach addons.mozilla.org.</string>
+    <string name="ext_amo_version">Version %1$s</string>
+    <string name="ext_amo_users">%1$s users</string>
+    <string name="ext_amo_permissions">Permissions:\n%1$s</string>
+    <string name="ext_amo_install">Install</string>
+    <string name="ext_amo_install_page">Install add-on from this page</string>
+
+    <!-- Private-browsing opt-in for an installed add-on -->
+    <string name="ext_private">Allow in private sessions</string>
+</resources>

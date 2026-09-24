@@ -37,7 +37,8 @@
                 android:textSize="12sp"
                 android:visibility="gone" />
 
-            <!-- Compact app-owned chrome (v2.0.2): row 1 = sessions drawer button + back/forward/undo/redo ... new tab, tabs, app menu -->
+            <!-- Compact app-owned chrome (v2.0.2): row 1 = sessions drawer button + back/forward + session
+                 name + new tab + tabs + app menu. All visibility derives from BrowserActivity.applyChrome(). -->
             <LinearLayout
                 android:id="@+id/topBar"
                 android:layout_width="match_parent"
@@ -215,13 +216,6 @@
                     android:visibility="gone" />
             </FrameLayout>
         </LinearLayout>
-
-        <FrameLayout
-            android:id="@+id/fullscreenContainer"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:background="@android:color/black"
-            android:visibility="gone" />
     </androidx.coordinatorlayout.widget.CoordinatorLayout>
 
     <!-- Left: app-owned session drawer -->

@@ -1,8 +1,10 @@
 package app.multisession.browser.extensions
 
+import android.content.Context
 import android.net.Uri
 import app.multisession.browser.core.AppLog
 import app.multisession.browser.core.BrowserCore
+import app.multisession.browser.R
 import app.multisession.browser.tabs.Tab
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,10 +33,43 @@ interface ExtensionHost {
     /** browser.tabs.create(): create a tab in the active browser session; return its Tab (with a configured, unopened GeckoSession). */
     fun onExtensionNewTab(ext: WebExtension, url: String?, active: Boolean): Tab?
     fun onExtensionOpenOptions(ext: WebExtension, url: String)
+    /** An install that did not originate from the Extensions screen finished (page `.xpi` link, AMO
+     *  add-on page). Default is a no-op so only hosts able to surface it have to implement it. */
+    fun onExtensionInstallResult(r: Result<WebExtension>) {}
 }
 
 /** A browserAction as last reported by an extension (default action, i.e. not tab-specific). */
 data class ExtensionAction(val extension: WebExtension, val action: WebExtension.Action)
+
+/**
+ * Localized, human-readable reason for a failed extension install. Shared by the Extensions screen
+ * and by installs started from a page / the AMO client so both report the same wording. Only
+ * Gecko's structured [WebExtension.InstallException] codes are mapped; anything else falls back to
+ * the platform message so nothing is ever swallowed.
+ */
+fun installErrorMessage(context: Context, t: Throwable): String {
+    val ie = t as? WebExtension.InstallException ?: return t.message ?: t.javaClass.simpleName
+    val c = context
+    return when (ie.code) {
+        WebExtension.InstallException.ErrorCodes.ERROR_NETWORK_FAILURE -> c.getString(R.string.ext_err_network)
+        WebExtension.InstallException.ErrorCodes.ERROR_INCORRECT_HASH -> c.getString(R.string.ext_err_hash)
+        WebExtension.InstallException.ErrorCodes.ERROR_CORRUPT_FILE -> c.getString(R.string.ext_err_corrupt)
+        WebExtension.InstallException.ErrorCodes.ERROR_FILE_ACCESS -> c.getString(R.string.ext_err_file)
+        WebExtension.InstallException.ErrorCodes.ERROR_SIGNEDSTATE_REQUIRED -> c.getString(R.string.ext_err_unsigned)
+        WebExtension.InstallException.ErrorCodes.ERROR_UNEXPECTED_ADDON_TYPE -> c.getString(R.string.ext_err_type)
+        WebExtension.InstallException.ErrorCodes.ERROR_UNEXPECTED_ADDON_VERSION -> c.getString(R.string.ext_err_version)
+        WebExtension.InstallException.ErrorCodes.ERROR_INCORRECT_ID -> c.getString(R.string.ext_err_id)
+        WebExtension.InstallException.ErrorCodes.ERROR_INVALID_DOMAIN -> c.getString(R.string.ext_err_domain)
+        WebExtension.InstallException.ErrorCodes.ERROR_BLOCKLISTED -> c.getString(R.string.ext_err_blocked)
+        WebExtension.InstallException.ErrorCodes.ERROR_INCOMPATIBLE -> c.getString(R.string.ext_err_incompatible)
+        WebExtension.InstallException.ErrorCodes.ERROR_UNSUPPORTED_ADDON_TYPE -> c.getString(R.string.ext_err_unsupported)
+        WebExtension.InstallException.ErrorCodes.ERROR_ADMIN_INSTALL_ONLY -> c.getString(R.string.ext_err_admin)
+        WebExtension.InstallException.ErrorCodes.ERROR_SOFT_BLOCKED -> c.getString(R.string.ext_err_softblocked)
+        WebExtension.InstallException.ErrorCodes.ERROR_USER_CANCELED -> c.getString(R.string.ext_err_canceled)
+        WebExtension.InstallException.ErrorCodes.ERROR_POSTPONED -> c.getString(R.string.ext_err_postponed)
+        else -> c.getString(R.string.ext_err_code, ie.code)
+    }
+}
 
 /**
  * Real GeckoView WebExtension support (v2.0.2 foundation).
@@ -195,11 +230,32 @@ class ExtensionManager(private val core: BrowserCore) {
         }
     }
 
+    /**
+     * Whether the extension may run in private sessions (our private sessions use
+     * `usePrivateMode(session.isPrivate)`), so this is what keeps an add-on out of private browsing
+     * unless the user opts in. Gecko's default is false. Mirrors [setEnabled]: main-thread safe
+     * (`assertOnHandlerThread` only requires a Looper, and the popup click handler has one).
+     */
+    fun setAllowedInPrivateBrowsing(ext: WebExtension, allowed: Boolean, onDone: (Throwable?) -> Unit = {}) {
+        controller.setAllowedInPrivateBrowsing(ext, allowed).accept({ refresh(); onDone(null) }, { onDone(it) })
+    }
+
     private val addonDelegate = object : WebExtensionController.AddonManagerDelegate {
         override fun onInstalled(extension: WebExtension) { wire(extension); refresh() }
         override fun onUninstalled(extension: WebExtension) { _actions.value = _actions.value - extension.id; refresh() }
         override fun onEnabled(extension: WebExtension) { refresh() }
         override fun onDisabled(extension: WebExtension) { _actions.value = _actions.value - extension.id; refresh() }
+
+        /**
+         * A Gecko-side install failed. Installs started by the app already report through their
+         * install() promise (the user-facing surface), so this logs the structured error code and
+         * refreshes the list only - one failure never produces two notifications, and failures Gecko
+         * raises on its own are no longer silently dropped.
+         */
+        override fun onInstallationFailed(extension: WebExtension?, installException: WebExtension.InstallException) {
+            AppLog.w(TAG, "Installation failed: code=${installException.code} addon=${extension?.id ?: "?"}")
+            refresh()
+        }
     }
 
     private val actionDelegate = object : WebExtension.ActionDelegate {

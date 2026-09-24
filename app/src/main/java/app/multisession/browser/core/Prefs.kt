@@ -26,7 +26,6 @@ object Prefs {
     const val KEY_OPEN_EXTERNAL_APPS = "open_external_apps"
     const val KEY_LIVE_TAB_LIMIT = "live_tab_limit"
     const val KEY_ACTIVE_SESSION = "active_session_id"
-    const val KEY_HUD_VISIBLE = "hud_visible"
     const val KEY_HUD_ITEMS = "hud_items"
     const val KEY_WEBRTC_COMPAT = "webrtc_compat"
     const val KEY_IDLE_HIBERNATE = "idle_hibernate_minutes"
@@ -75,10 +74,6 @@ object Prefs {
     var activeSessionId: String?
         get() = sp.getString(KEY_ACTIVE_SESSION, null)
         set(value) = sp.edit().putString(KEY_ACTIVE_SESSION, value).apply()
-
-    var hudVisible: Boolean
-        get() = sp.getBoolean(KEY_HUD_VISIBLE, false)
-        set(value) = sp.edit().putBoolean(KEY_HUD_VISIBLE, value).apply()
 
     /** Comma separated HUD item keys in display order (see ui.browser.HudController).
      *  Values are filtered to [DEFAULT_HUD_KEYS] so preferences saved by older versions (2.1.2 and

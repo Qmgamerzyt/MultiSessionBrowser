@@ -177,8 +177,23 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
         host?.onContextMenu(tab, element)
     }
 
-    /** Downloads: content Gecko cannot render. The body stream is already authenticated in the session context. */
+    /** Downloads: content Gecko cannot render. The body stream is already authenticated in the session context.
+     *  An `.xpi` / `application/x-xpinstall` response is an extension install request rather than a file to
+     *  save: it is handed to the addon manager (where Gecko validates manifest AND Mozilla signature) instead
+     *  of being written to disk, so the install prompt and the signature check behave exactly as in Firefox. */
     override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
+        if (isExtensionInstall(response)) {
+            val em = core.extensions
+            val url = response.uri
+            try { response.body?.close() } catch (_: Throwable) {}
+            if (em.host == null) {   // no foreground UI for the permission prompt: installing would be auto-denied
+                AppLog.i(TAG, "Extension install ignored (no foreground UI): $url")
+                return
+            }
+            AppLog.i(TAG, "Intercepted extension download: $url")
+            em.install(url) { r -> em.host?.onExtensionInstallResult(r) }
+            return
+        }
         val h = host
         if (h == null) {
             AppLog.i(TAG, "Download ignored (no foreground UI)")
@@ -186,6 +201,13 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
             return
         }
         h.onDownloadRequested(tab, response)
+    }
+
+    /** True when the response is a WebExtension package (.xpi path or x-xpinstall content type). */
+    private fun isExtensionInstall(response: WebResponse): Boolean {
+        if (response.uri.substringBefore('?').endsWith(".xpi", ignoreCase = true)) return true
+        val ct = response.headers.entries.firstOrNull { it.key.equals("Content-Type", ignoreCase = true) }?.value ?: return false
+        return ct.contains("x-xpinstall", ignoreCase = true)
     }
 
     override fun onCrash(session: GeckoSession) {
