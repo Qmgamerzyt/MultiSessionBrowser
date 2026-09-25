@@ -42,30 +42,37 @@ APKs: `app/build/outputs/apk/debug/app-arm64-v8a-debug.apk` and `app-armeabi-v7a
 | compileSdk / targetSdk / minSdk | 37.1 (`compileSdk = 37`, `compileSdkMinor = 1`) / 35 / 28 (Android 9) |
 
 ## Features
-- Sessions: create, rename, colour, private sessions, duplicate (tabs only – never cookies), reset data, delete.
+- Sessions: create, rename, colour, Incognito sessions, duplicate (tabs only – never cookies), reset data, delete.
 - Tabs per session: Chrome-like grid, thumbnails, swipe to close, drag to reorder, reopen closed tab.
 - Real Firefox engine (GeckoView): JavaScript, DOM/IndexedDB storage, WebSockets, popups (`window.open` / `target=_blank`
   → new tab in the same session), file upload incl. camera capture, downloads with per-session cookies,
   camera/microphone (WebRTC) & location prompts, fullscreen video, HTTP auth, SSL warnings.
 - Persistence: Room/SQLite (WAL) – sessions, tabs, per-session history, global + session bookmarks; the
   active session & tab are restored after process death.
-- Memory: only N most recent tabs keep a live WebView (default 6, configurable); other tabs are frozen with
-  `saveState()` and restored on demand; `onTrimMemory` frees more.
-- Local HTML projects: import ZIP / HTML / paste HTML, served via `WebViewAssetLoader` over
-  `https://appassets.androidplatform.net` (no `file://`). Export as ZIP.
+- Memory: only the N most recent tabs keep a live `GeckoSession` (`live_tab_limit`, default 6, configurable;
+  the active tab and tabs playing media always survive); older sessions are closed and rebuilt from the Room
+  DB on demand, and `onTrimMemory` frees thumbnails.
+- Local HTML projects: import ZIP / HTML / paste HTML, served from the APK's own assets over
+  `resource://android/assets/www/` (never `file://`); `TabDelegates.onLoadRequest` allows exactly that prefix.
+  Export as ZIP.
 - HTML-to-APK: put your site into `app/src/main/assets/www/` (with `index.html`) → the built APK opens it as
   home page. See `docs/ARCHITECTURE.md` §8.
 - Settings: search engine, homepage, JS, zoom, autoplay, third-party cookies, Safe Browsing, user agent
   (default / Chrome-compatible / custom), desktop mode per tab, theme, tabs kept alive, downloads prompt.
 
 ## Important honesty notes
-- **Isolation requires a modern Android System WebView** (Profile API, `WebViewFeature.MULTI_PROFILE`). On
-  Android 9 the WebView is updated through Google Play, so this is normally available. If it is not, the app
-  shows a permanent warning banner and all sessions share one cookie jar – it never pretends otherwise.
+- **Isolation is the engine's, not the platform's.** Since v2.0.0 the engine is GeckoView, and every session
+  gets its own `GeckoSessionSettings.contextId` (`SessionFactory` → `SessionIsolation.contextId`), which
+  partitions cookies, storage, cache and permissions per session; Incognito sessions additionally run in Gecko's
+  private mode. There is no "shared cookie jar" fallback any more (`SessionIsolation.isIsolated` is `true`), so
+  the old warning banner can no longer appear.
 - The app does not (and cannot) compile APKs on the phone. The project export + this repository + GitHub
   Actions **is** the build workflow.
-- Web Notifications are not supported by Android WebView; sites requesting them get `denied`.
-- `blob:` downloads cannot be handled by Android DownloadManager; the app tells you and offers an external browser.
+- Web Notifications are raised by GeckoView itself and go through the app's site-permission prompt
+  (`Site permissions` → "Notifications"); the old "always denied" behaviour belonged to the system WebView.
+- `blob:` / `data:` downloads are read from the *tab's own* Gecko stream (so session-authenticated and blob
+  downloads work); only resuming them later needs a re-fetch, which the app refuses and asks you to restart
+  from the page instead of guessing at a URL.
 
 See `docs/ARCHITECTURE.md`, `docs/TEST_PLAN.md` and the original specification in `docs/SPEC.md`.
 
@@ -95,7 +102,7 @@ See `docs/ARCHITECTURE.md`, `docs/TEST_PLAN.md` and the original specification i
 
 **Sessions**: `sessions.isDefault` (the first existing session became default in the migration). Default is always listed first and opened on cold start; the rest is drag-reorderable in the session drawer; "Set as default" in the session menu.
 
-**UI**: left three-line button → session drawer; back/forward/undo/redo next to it (undo/redo = page edit undo/redo; long-press undo = reopen closed tab); central address bar (all focus fixes preserved); new-tab + tabs button (tab/group sheet); right three-line button → app menu drawer (with extension buttons and Site permissions); floating selectable HUD (menu → Show HUD / Customize HUD; draggable; "Hide/show toolbar" item).
+**UI**: left three-line button → session drawer; back/forward/undo/redo next to it (undo/redo = page edit undo/redo; long-press undo = reopen closed tab); central address bar (all focus fixes preserved); new-tab + tabs button (tab/group sheet); right three-line button → app menu drawer (with extension buttons and Site permissions); floating selectable HUD (menu → Show HUD / Customize HUD; draggable; "Hide/show toolbar" item) — *removed in v2.1.7 together with the rest of the bottom HUD; the toolbar toggle and the fullscreen exit are now in the app menu and the new draggable fullscreen-exit button.*
 
 **Downloads**: app-owned manager (`downloads/AppDownloadManager.kt`, `downloads` table) with progress, pause, resume (HTTP Range), cancel, retry, delete, open, share, copy link, source page, type classification (archive/APK/PDF/image/video/audio/Office/text). APKs open the system installer only after a confirmation; archives are never extracted. Gecko's session-authenticated stream is still used for the initial download (blob:/data: work); resume/retry re-fetch via `GeckoWebExecutor` in the default cookie jar (sign-in protected files report this and must be restarted from the page).
 

@@ -308,6 +308,11 @@ Run for this release (no local Android SDK is used anywhere in this project):
 * **GeckoView API** — every GV API touched in this release was read out of the extracted GV155
   `classes.jar` (`/tmp/opencode/gv155cls/`), not guessed. The two claims this release *changes* are
   documented in the ground-truth table in `docs/EXTENSIONS.md`.
+* **Docs** — `README.md` no longer advertises the removed HUD and its WebView-era Features/honesty
+  bullets were corrected against the code (live `GeckoSession` LRU, `resource://android/assets/www/`
+  local content, isolation = GeckoView `contextId`, web notifications via site permissions, `blob:`
+  read from the tab's stream); `docs/ARCHITECTURE.md` §F marks its WebView-era risk list superseded;
+  `docs/EXTENSIONS.md` carries the corrected GV155 ground truth and the Incognito naming.
 * **CI** — the commit is the compile gate; the annotated tag `2.1.7` == `versionName`.
 
 Deliberately **not** changed: extension signing/security, session isolation, the modern UI, and

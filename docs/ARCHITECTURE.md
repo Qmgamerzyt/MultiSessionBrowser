@@ -96,6 +96,13 @@ docs/                                 this file, TEST_PLAN.md, SPEC.md
 | 10 Production cleanup (enable R8, real signing key, icons) | partially – R8 off by default for deterministic first build |
 
 ## F. Risks & limitations
+
+> **Superseded by v2.0.0 (GeckoView 155).** The four WebView-era risks below describe the engine this
+> document was written for. Isolation no longer depends on the platform WebView at all: every session gets
+> its own `GeckoSessionSettings.contextId` (see `SessionFactory` / `SessionIsolation`), so there is no
+> `MULTI_PROFILE` fallback, no shared-cookie-jar banner and no `WebView.clearCache()` question anymore.
+> Current engine-specific risks live in `docs/GECKOVIEW_MIGRATION.md`.
+
 - Devices whose System WebView lacks `MULTI_PROFILE`: sessions share data (banner shown). Fix = update WebView.
 - `WebView.clearCache()` scope with profiles should be verified on device; profile deletion always removes everything.
 - Private sessions use a persistent profile while alive; data is removed when the session is deleted or on
