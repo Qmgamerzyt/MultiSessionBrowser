@@ -58,6 +58,8 @@ import app.multisession.browser.engine.BrowserHost
 import app.multisession.browser.engine.SessionFactory
 import app.multisession.browser.engine.WebNotifications
 import app.multisession.browser.extensions.AmoApi
+import app.multisession.browser.extensions.EXTDBG
+import app.multisession.browser.extensions.EXTDBG_TAG
 import app.multisession.browser.extensions.ExtensionAction
 import app.multisession.browser.extensions.ExtensionHost
 import app.multisession.browser.extensions.installErrorMessage
@@ -171,6 +173,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     private var promptShowing = false
     private val sitePermissions get() = core.sitePermissions
     private var extensionPopup: BottomSheetDialog? = null
+    /** v2.1.8 option C: the labelled "Extension actions" sheet. */
+    private var extensionActions: BottomSheetDialog? = null
 
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         handleFileChooserResult(result.resultCode, result.data)
@@ -271,6 +275,9 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     override fun onStop() {
         super.onStop()
         if (!uiReady) return
+        // v2.1.8 (Q4a): an extension popup belongs to the tab that was on screen; never leave it
+        // behind while the app is in the background (its own dismiss listener releases the session).
+        dismissExtensionSurfaces()
         // The displayed session stays ACTIVE in the background on purpose: audio / voice calls
         // (Discord) keep running and the page keeps its input focus for when the user returns.
         currentTab?.let { captureThumbnail(it) }
@@ -916,6 +923,50 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
 
     // ================================================================== app menu (right drawer)
 
+    /** "Extension actions" (v2.1.8 option C): every installed add-on that exposes a browser/page
+     *  action, as a labelled list. One tap runs the real action - Gecko then either shows the
+     *  add-on's own popup (bottom sheet, popup toggle already handled) or delivers
+     *  `browserAction.onClicked` to a script-only add-on's background page. */
+    private fun showExtensionActions(list: Collection<ExtensionAction>) {
+        if (list.isEmpty()) return
+        val sheet = BottomSheetDialog(this)
+        val view = LayoutInflater.from(this).inflate(R.layout.sheet_extension_actions, null)
+        view.findViewById<TextView>(R.id.actionsTitle).text = getString(R.string.ext_actions)
+        val rows = view.findViewById<LinearLayout>(R.id.actionsList)
+        val inflater = LayoutInflater.from(this)
+        list.forEach { a ->
+            val row = inflater.inflate(R.layout.item_menu_entry, rows, false)
+            val icon = row.findViewById<ImageView>(R.id.entryIcon)
+            val name = row.findViewById<TextView>(R.id.entryTitle)
+            val badge = row.findViewById<TextView>(R.id.entryBadge)
+            val label = a.action.title ?: a.extension.metaData.name ?: a.extension.id
+            name.text = label
+            row.contentDescription = label
+            val bt = a.action.badgeText
+            badge.isVisible = !bt.isNullOrBlank()
+            badge.text = bt ?: ""
+            // Same dimming rule as the strip: a disabled action or a switched-off add-on is listed
+            // but visibly inert - tapping it still goes to Gecko, which decides what happens.
+            row.alpha = if (a.action.enabled == false || !a.extension.metaData.enabled) 0.4f else 1f
+            icon.setImageResource(R.drawable.ic_extension)
+            try {
+                val size = (24 * resources.displayMetrics.density).toInt()
+                a.action.icon?.getBitmap(size)?.accept({ bmp: Bitmap? -> if (bmp != null) icon.setImageBitmap(bmp) }, { AppLog.d(TAG, "ext action icon unavailable") })
+            } catch (_: Throwable) {}
+            row.setOnClickListener {
+                sheet.dismiss()
+                closeDrawers()
+                if (EXTDBG) AppLog.d(EXTDBG_TAG, "action tapped ext=${a.extension.id}")
+                try { a.action.click() } catch (t: Throwable) { AppLog.w(TAG, "action click failed", t) }
+            }
+            rows.addView(row)
+        }
+        sheet.setContentView(view)
+        sheet.setOnDismissListener { if (extensionActions === sheet) extensionActions = null }
+        extensionActions = sheet
+        sheet.show()
+    }
+
     private fun renderMenu() {
         val tab = currentTab
         val session = core.sessions.active.value
@@ -960,6 +1011,14 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         val active = core.downloads.activeCount
         entry(R.drawable.ic_download, R.string.downloads, badge = if (active > 0) active.toString() else null) { openUrlLauncher.launch(Intent(this, DownloadsActivity::class.java)) }
         entry(R.drawable.ic_extension, R.string.extensions, badge = core.extensions.extensions.value.size.takeIf { it > 0 }?.toString()) { openUrlLauncher.launch(Intent(this, ExtensionsActivity::class.java)) }
+        // v2.1.8 option C: one labelled list of every add-on that actually exposes an action.
+        // Tapping a row runs the real action.click(), so Gecko decides what happens next: an add-on
+        // with a popup (Cookie-Editor) opens its own popup from the bottom, a script-only add-on
+        // gets browserAction.onClicked in its background page. Add-ons with no action (background /
+        // ad-block only) are deliberately absent - there is nothing to trigger, and they remain
+        // reachable from the Extensions screen above.
+        val actionList = core.extensions.actionsFor(tab?.geckoSession)
+        if (actionList.isNotEmpty()) entry(R.drawable.ic_extension, R.string.ext_actions) { showExtensionActions(actionList) }
         // AMO add-on page: the site's own install button needs navigator.mozAddonManager, which
         // GeckoView only exposes under narrow conditions - offer the install straight from the API.
         AmoApi.slugFromPage(tab?.url)?.let { slug ->
@@ -970,7 +1029,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         entry(R.drawable.ic_tune, R.string.settings) { startActivity(Intent(this, SettingsActivity::class.java)) }
         val title = session?.name ?: getString(R.string.menu_app)
         val subtitle = if (hasPage) UrlUtils.displayHost(tab!!.url) else ""
-        appMenu.render(title, subtitle, entries, core.extensions.actions.value.values) { a -> closeDrawers(); try { a.action.click() } catch (t: Throwable) { AppLog.w(TAG, "action click failed", t) } }
+        appMenu.render(title, subtitle, entries, actionList) { a -> closeDrawers(); try { a.action.click() } catch (t: Throwable) { AppLog.w(TAG, "action click failed", t) } }
     }
 
     /** "Hide toolbar" (app-owned fullscreen): the page gets the whole screen; the floating
@@ -1200,6 +1259,27 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         }
         extensionPopup = sheet
         sheet.show()
+    }
+
+    override fun isExtensionPopupOpen(): Boolean = extensionPopup?.isShowing == true
+
+    override fun dismissExtensionPopup() {
+        // The dialog's own onDismissListener releases the GeckoView session and clears the field.
+        extensionPopup?.dismiss()
+    }
+
+    /** v2.1.8 (Q4a): both extension surfaces are tied to the tab that was on screen. */
+    private fun dismissExtensionSurfaces() {
+        dismissExtensionPopup()
+        extensionActions?.dismiss()
+    }
+
+    /** v2.1.8 (Q4a): a different tab is now in the GeckoView, so a popup from the old one is stale. */
+    override fun onDisplayedTabChanged(tab: Tab?) {
+        if (extensionPopup?.isShowing == true || extensionActions?.isShowing == true) {
+            if (EXTDBG) AppLog.d(EXTDBG_TAG, "closing extension surfaces on tab change")
+            dismissExtensionSurfaces()
+        }
     }
 
     override fun onExtensionsChanged() {

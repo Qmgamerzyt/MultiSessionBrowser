@@ -55,7 +55,6 @@
     <string name="ext_limits_title">What extensions can and cannot do here</string>
     <string name="ext_limits_body">Extensions run inside the Firefox engine (GeckoView) exactly as in Firefox for Android: background and content scripts, storage, webRequest, cookies, tabs (create/remove/update), browser action buttons with popups and options pages.\n\nNot possible in this app/GeckoView: per-session (contextId) isolation of extensions – an extension is runtime-wide and can see tabs of every session; sidebars, devtools panels, context-menu entries, omnibox keywords, keyboard commands, native messaging, multiple windows. Only Mozilla-signed extensions can be installed.</string>
     <string name="ext_popup">Extension popup</string>
-    <string name="ext_actions">Extension buttons</string>
     <string name="js_executed">Script sent to the page</string>
     <string name="js_no_page">Open a web page first – javascript: runs in the current page</string>
     <string name="dl_kind_archive">Archive</string>

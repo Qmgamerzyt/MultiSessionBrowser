@@ -25,6 +25,9 @@ interface BrowserHost {
     fun onContextMenu(tab: Tab, element: GeckoSession.ContentDelegate.ContextElement)
     /** The tab's GeckoSession is about to be closed: release it from the GeckoView if it is displayed. */
     fun onSessionClosing(tab: Tab)
+    /** The tab shown in the GeckoView changed (null = the start page). v2.1.8: lets the host drop
+     *  surfaces that belong to the previous tab, e.g. an open extension popup. */
+    fun onDisplayedTabChanged(tab: Tab?) {}
     /** The content process of the tab crashed or was killed; its GeckoSession is already closed. */
     fun onContentProcessGone(tab: Tab, crashed: Boolean)
 

@@ -94,7 +94,6 @@ class ExtensionsActivity : AppCompatActivity(), ExtensionHost {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
-            R.id.action_amo_find -> amoSearch()
             R.id.action_install_url -> installFromInput()
             R.id.action_install_file -> pickXpi.launch(arrayOf("application/x-xpinstall", "application/zip", "application/octet-stream", "*/*"))
             R.id.action_browse_amo -> openInBrowser(AMO_HOME)
@@ -145,30 +144,6 @@ class ExtensionsActivity : AppCompatActivity(), ExtensionHost {
     }
 
     // ================================================================== AMO browse
-
-    private fun amoSearch() {
-        val input = EditText(this).apply { hint = getString(R.string.ext_amo_hint); setSingleLine() }
-        MaterialAlertDialogBuilder(this).setTitle(R.string.ext_amo_find).setView(input)
-            .setPositiveButton(R.string.ext_amo_search) { _, _ -> amoResults(input.text.toString()) }
-            .setNegativeButton(android.R.string.cancel, null).show()
-    }
-
-    private fun amoResults(query: String) {
-        lifecycleScope.launch {
-            val res = runCatching { withContext(Dispatchers.IO) { AmoApi.search(query) } }
-            if (isFinishing || isDestroyed) return@launch
-            val list = res.getOrNull()
-            if (list == null) {
-                AppLog.w("Extensions", "AMO search failed", res.exceptionOrNull())
-                snack(getString(R.string.ext_amo_error)); return@launch
-            }
-            if (list.isEmpty()) { snack(getString(R.string.ext_amo_empty)); return@launch }
-            val labels = list.map { a -> a.name + if (a.summary.isBlank()) "" else "\n" + a.summary }.toTypedArray()
-            MaterialAlertDialogBuilder(this@ExtensionsActivity).setTitle(R.string.ext_amo_find)
-                .setItems(labels) { _, i -> amoDetail(list[i]) }
-                .setNegativeButton(android.R.string.cancel, null).show()
-        }
-    }
 
     private fun amoDetail(a: AmoAddon) {
         val msg = buildString {

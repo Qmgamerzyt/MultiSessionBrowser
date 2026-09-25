@@ -55,6 +55,9 @@ class TabManager(private val core: BrowserCore) {
     /** The foreground Activity (set in onStart / cleared in onStop). UI callbacks from the engine go through it. */
     var host: BrowserHost? = null
 
+    /** Tab whose GeckoSession is (or was last) attached to the GeckoView; null while the start page shows. */
+    private var displayedTab: Tab? = null
+
     fun addListener(l: Listener) = listeners.add(l)
     fun removeListener(l: Listener) = listeners.remove(l)
 
@@ -98,6 +101,17 @@ class TabManager(private val core: BrowserCore) {
     }
 
     fun findBySession(session: GeckoSession): Tab? = tabs.values.firstOrNull { it.geckoSession === session }
+
+    /**
+     * Every tab that currently holds a GeckoSession paired with it (the same population as
+     * [liveCount]). v2.1.8: lets [ExtensionManager.reattachAll] reach the sessions that were created
+     * before the extension list arrived and (re-)apply their delegates and the active-tab marker.
+     */
+    fun liveSessions(): List<Pair<Tab, GeckoSession>> =
+        tabs.values.mapNotNull { t -> t.geckoSession?.let { t to it } }
+
+    /** The GeckoSession behind the GeckoView right now, null while the start page is on screen. */
+    fun displayedSession(): GeckoSession? = displayedTab?.geckoSession
 
     fun liveCount(): Int = tabs.values.count { it.geckoSession != null }
 
@@ -660,6 +674,11 @@ class TabManager(private val core: BrowserCore) {
     fun closeSession(tab: Tab) {
         val gs = tab.geckoSession ?: return
         host?.onSessionClosing(tab)
+        // v2.1.8: Gecko's tabTracker would otherwise keep pointing at a session that is about to
+        // disappear (an add-on calling tabs.query then sees a dead tab), and the tab's action
+        // overrides must go with it so sessionActions cannot grow.
+        core.extensions.setTabActive(gs, false)
+        core.extensions.forgetSession(gs)
         tab.geckoSession = null
         tab.isLoading = false
         tab.awaitingDisplay = false
@@ -673,8 +692,22 @@ class TabManager(private val core: BrowserCore) {
         AppLog.d(TAG, "GeckoSession closed tab=${tab.id.take(8)}")
     }
 
-    /** Marks [displayed] active/focused and every other live session inactive (saves CPU; audio keeps playing). */
+    /**
+     * Marks [displayed] active/focused and every other live session inactive (saves CPU; audio keeps playing).
+     *
+     * v2.1.8: this is also the single place Gecko's extension view of "the active tab" is updated.
+     * `WebExtensionController.setTabActive` dispatches `GeckoView:WebExtension:SetTabActive`, whose
+     * handler sets `mobileWindowTracker._topWindow` when active and `nativeTab.active` either way;
+     * `tabTracker.activeTab` reads that top window, so before this mirror existed it was always
+     * null and an add-on's `action.click()` died in `addActiveTabPermission(null)` - a silent no-op.
+     * Ordering inside the loop is irrelevant: `setTabActive(_, false)` never clears the top window.
+     *
+     * Reports a real change through [BrowserHost.onDisplayedTabChanged] so surfaces tied to the old
+     * tab (an extension popup) can be dropped; re-entrant calls for the same tab do not fire it.
+     */
     fun setDisplayed(displayed: Tab?) {
+        val changed = displayed !== displayedTab
+        displayedTab = displayed
         tabs.values.forEach { t ->
             val gs = t.geckoSession ?: return@forEach
             if (!gs.isOpen) return@forEach
@@ -685,7 +718,9 @@ class TabManager(private val core: BrowserCore) {
             } catch (t2: Throwable) {
                 AppLog.w(TAG, "setActive failed", t2)
             }
+            core.extensions.setTabActive(gs, isIt)
         }
+        if (changed) host?.onDisplayedTabChanged(displayed)
     }
 
     /** Background tabs that may be hibernated automatically: not displayed, not a pending popup, not playing / capturing media. */

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v2.1.8: extension fix release - active-tab wiring (action click / tabs.query), per-session
+     delegates and tab-specific action overrides, popup toggle-close + tab-switch dismissal,
+     the "Extension actions" sheet, add-on initiated downloads, install feedback. -->
+<resources>
+    <!-- extensions -->
+    <string name="ext_actions">Extension actions</string>
+    <string name="ext_install_no_ui">Open the Extensions screen to install add-ons.</string>
+</resources>

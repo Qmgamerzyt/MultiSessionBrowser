@@ -4,7 +4,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
 
 /** One add-on as reported by the official AMO (addons.mozilla.org) v5 REST API. */
 data class AmoAddon(
@@ -60,15 +59,6 @@ object AmoApi {
         } finally {
             conn.disconnect()
         }
-    }
-
-    /** Blocking: search AMO for Android add-ons (already filtered with `platform=android`). */
-    fun search(query: String, page: Int = 1): List<AmoAddon> {
-        val q = query.trim()
-        if (q.isEmpty()) return emptyList()
-        val url = "$BASE/search/?q=${URLEncoder.encode(q, "UTF-8")}&platform=android&lang=$LANG&page=$page"
-        val results = get(url).optJSONArray("results") ?: JSONArray()
-        return (0 until results.length()).mapNotNull { results.optJSONObject(it)?.toAddon() }
     }
 
     /** Blocking: one add-on by slug (fresh .xpi URL, permissions, description). */

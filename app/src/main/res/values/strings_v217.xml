@@ -48,7 +48,7 @@
     <string name="group_created">Tabs grouped</string>
 
     <!-- extensions -->
-    <string name="ext_add">Add extension</string>
+    <string name="ext_add">Add extension by url</string>
     <string name="ext_browse_amo">Browse Firefox Add-ons</string>
     <string name="ext_update_check">Check for updates</string>
     <string name="ext_no_update">No update available</string>

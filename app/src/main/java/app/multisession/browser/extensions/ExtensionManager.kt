@@ -36,10 +36,28 @@ interface ExtensionHost {
     /** An install that did not originate from the Extensions screen finished (page `.xpi` link, AMO
      *  add-on page). Default is a no-op so only hosts able to surface it have to implement it. */
     fun onExtensionInstallResult(r: Result<WebExtension>) {}
+
+    // ---- v2.1.8 popup lifecycle ----
+    /** True while the browserAction popup surface from a previous click is still on screen. Lets a
+     *  second click toggle it closed instead of always spawning a fresh popup session. */
+    fun isExtensionPopupOpen(): Boolean = false
+    /** Close the browserAction popup if it is showing: a different tab was displayed, or the app went
+     *  to the background. Default is a no-op so only hosts with a surface have to implement it. */
+    fun dismissExtensionPopup() {}
 }
 
 /** A browserAction as last reported by an extension (default action, i.e. not tab-specific). */
 data class ExtensionAction(val extension: WebExtension, val action: WebExtension.Action)
+
+/**
+ * Temporary v2.1.8 extension diagnostic switch. While it is false every `EXTDBG` line is compiled
+ * out of the logging path, so a release build writes none of it; flip it to true for one diagnostic
+ * build when tracing an add-on problem. The switch and its call sites are removed in 2.1.9.
+ *
+ * Never logs cookies, tokens or a URL beyond `scheme://host`.
+ */
+internal const val EXTDBG = false
+internal const val EXTDBG_TAG = "EXTDBG"
 
 /**
  * Localized, human-readable reason for a failed extension install. Shared by the Extensions screen
@@ -78,10 +96,13 @@ fun installErrorMessage(context: Context, t: Throwable): String {
  *  - install from an https XPI URL or a local .xpi file (signature + manifest are validated by Gecko), the install
  *    permission prompt (PromptDelegate), enable / disable / uninstall, optional-permission prompts;
  *  - persistence: Gecko stores installed extensions and their enabled state in the profile - nothing to redo in the app;
- *  - browserAction / pageAction: icon, title, badge -> app menu; click -> action.click(); popups rendered in a
- *    GeckoSession the app displays (ActionDelegate.onTogglePopup / onOpenPopup);
+ *  - browserAction / pageAction: icon, title, badge -> app menu and the "Extension actions" sheet; click ->
+ *    action.click() (toggle-closes an open popup); popups rendered in a GeckoSession the app displays
+ *    (ActionDelegate.onTogglePopup / onOpenPopup);
  *  - browser.tabs.create / remove / update (TabDelegate + per-session SessionTabDelegate) -> tabs of the ACTIVE
  *    browser session; browser.runtime.openOptionsPage.
+ *  - downloads.download(): fetched by the app and written straight to the public Downloads folder, with
+ *    progress and STATE_COMPLETE / STATE_INTERRUPTED reported back (ExtensionDownloadRunner).
  *  - background scripts, content scripts, webRequest, storage, cookies, etc. run inside Gecko exactly as in Firefox.
  *
  * Documented limitations (Android/GeckoView architecture, not app bugs - see docs/EXTENSIONS.md):
@@ -90,7 +111,8 @@ fun installErrorMessage(context: Context, t: Throwable): String {
  *    permissions, read cookies of every contextual identity (browser.cookies with storeId). There is no per-session
  *    enable/disable in GeckoView.
  *  - No sidebar, no devtools panels, no native messaging, no browser.windows UI (one window), no keyboard commands UI,
- *    no context-menu items (menus API renders nothing in GeckoView), no omnibox keywords, no downloads.open().
+ *    no context-menu items (menus API renders nothing in GeckoView), no omnibox keywords, no downloads.open();
+ *    downloads.saveAs shows no file chooser and downloads.pause/remove issued by the add-on are not observable.
  *  - Install of unsigned extensions is refused by Gecko in release builds (Mozilla signing is required).
  */
 class ExtensionManager(private val core: BrowserCore) {
@@ -101,6 +123,16 @@ class ExtensionManager(private val core: BrowserCore) {
     private val _actions = MutableStateFlow<Map<String, ExtensionAction>>(emptyMap())
     /** Default browserActions keyed by extension id. */
     val actions: StateFlow<Map<String, ExtensionAction>> = _actions.asStateFlow()
+
+    /**
+     * Tab-specific action overrides Gecko reported with a non-null session (v2.1.8, Q8a). Keyed by
+     * extension id, then by the GeckoSession the override belongs to; consulted through [actionsFor]
+     * which merges the override over the default with [WebExtension.Action.withDefault].
+     *
+     * UI-thread only (ActionDelegate callbacks and menu rendering both run there), so no locking.
+     * Entries are dropped in [forgetSession] when a tab's session closes so the map cannot grow.
+     */
+    private val sessionActions = HashMap<String, HashMap<GeckoSession, WebExtension.Action>>()
 
     var host: ExtensionHost? = null
     private var started = false
@@ -128,6 +160,9 @@ class ExtensionManager(private val core: BrowserCore) {
                 _actions.value = _actions.value.filterKeys { id -> exts.any { it.id == id } }
                 AppLog.i(TAG, "${exts.size} extension(s) installed")
                 host?.onExtensionsChanged()
+                // v2.1.8 (defect 2): sessions created before the list arrived never got their
+                // delegates, and the first active-tab marker may have been dispatched too early.
+                reattachAll()
             }, { AppLog.w(TAG, "list() failed", it) })
         } catch (t: Throwable) {
             AppLog.w(TAG, "list() not available", t)
@@ -188,15 +223,98 @@ class ExtensionManager(private val core: BrowserCore) {
         }
     }
 
+    /**
+     * v2.1.8 (defect 2): [attachToSession] only ever ran while a session was created, and at that
+     * moment `_extensions` is still empty - `list()` answers asynchronously after `ready.complete`,
+     * and [SessionFactory] creates sessions from the same startup path. Every session that existed
+     * before the list came back therefore had no SessionTabDelegate / ActionDelegate, so
+     * `browser.tabs.remove`, `browser.tabs.update` and tab-scoped action updates were dropped
+     * without a trace.
+     *
+     * Re-runs the attach for every session that still exists and re-applies the active-tab marker
+     * Gecko needs for `tabs.query({active:true})` and for `action.click()` to reach the add-on at
+     * all. Cheap (a handful of sessions, one delegate call each) and called from [refresh], which
+     * already runs on install / enable / disable / update check.
+     */
+    fun reattachAll() {
+        // core.scope is Main.immediate: runs inline when we are already on the UI thread and hops
+        // there otherwise, so TabManager's tabs map is only read from the thread that mutates it.
+        core.scope.launch {
+            try {
+                val live = core.tabs.liveSessions()
+                live.forEach { (tab, gs) -> attachToSession(gs, tab) }
+                val shown = core.tabs.displayedSession()
+                live.forEach { (_, gs) -> if (gs.isOpen) setTabActive(gs, gs === shown) }
+                if (EXTDBG) AppLog.d(EXTDBG_TAG, "reattachAll sessions=${live.size} shown=${shown != null}")
+            } catch (t: Throwable) {
+                AppLog.w(TAG, "reattachAll failed", t)
+            }
+        }
+    }
+
+    /**
+     * v2.1.8 (root cause of "tapping an add-on does nothing"): Gecko tracks which tab is active in
+     * `tabTracker.activeTab`, which is only ever set from here. Without it
+     * `ExtensionActions.triggerClickOrPopup(null)` throws a TypeError while handling
+     * `GeckoView:BrowserAction:Click`, so `Action.click()`'s `GeckoResult` never resolves: no
+     * popup, no `browserAction.onClicked`, no error - a silent no-op. `tabs.query({active:true})`
+     * (Cookie-Editor's popup calls it nine times) returned an empty list for the same reason.
+     *
+     * Own try/catch by design: this is a best-effort marker on a background tab switch, so a
+     * Gecko-side failure must never abort the switch itself. The failure is logged, never swallowed.
+     *
+     * Distinct from `GeckoSession.setActive()`, which only toggles `docShellIsActive`.
+     */
+    fun setTabActive(gs: GeckoSession, active: Boolean) {
+        try {
+            gs.webExtensionController.setTabActive(gs, active)
+            if (EXTDBG) AppLog.d(EXTDBG_TAG, "setTabActive active=$active open=${gs.isOpen}")
+        } catch (t: Throwable) {
+            AppLog.w(TAG, "setTabActive failed active=$active", t)
+        }
+    }
+
+    /**
+     * The actions to render for [displayedSession]: the default action of every add-on that exposes
+     * one, with the tab-specific override Gecko reported for that session merged over it by
+     * [WebExtension.Action.withDefault] (v2.1.8, Q8a). Add-ons with no action at all are not here -
+     * a background/ad-block add-on has nothing to trigger and stays in the Extensions screen only.
+     */
+    fun actionsFor(displayedSession: GeckoSession?): Collection<ExtensionAction> =
+        _actions.value.values.map { d ->
+            val tabAction = displayedSession?.let { sessionActions[d.extension.id]?.get(it) }
+                ?: return@map d
+            ExtensionAction(d.extension, tabAction.withDefault(d.action))
+        }
+
+    /** The tab's session is closing: drop its action overrides so the map cannot grow. */
+    fun forgetSession(gs: GeckoSession) {
+        if (sessionActions.isEmpty()) return
+        sessionActions.values.forEach { it.remove(gs) }
+        sessionActions.entries.removeAll { it.value.isEmpty() }
+    }
+
     // ------------------------------------------------------------------ delegates
 
     private fun wire(ext: WebExtension) {
         try {
             ext.setActionDelegate(actionDelegate)
             ext.setTabDelegate(tabDelegate)
+            // v2.1.8 (Q6a): without this Gecko parks `downloads.download()` in `mPendingDownload`
+            // forever, so the add-on's promise never settled. The runner answers it honestly -
+            // a rejected promise when the fetch cannot start, never a silent hang.
+            ext.setDownloadDelegate(downloadDelegate)
         } catch (t: Throwable) {
             AppLog.w(TAG, "wire failed for ${ext.id}", t)
         }
+    }
+
+    /** Owns every add-on initiated download (v2.1.8). See [ExtensionDownloadRunner]. */
+    private val downloadRunner = ExtensionDownloadRunner(core)
+    private val downloadDelegate = object : WebExtension.DownloadDelegate {
+        override fun onDownload(
+            extension: WebExtension, request: WebExtension.DownloadRequest,
+        ): GeckoResult<WebExtension.DownloadInitData>? = downloadRunner.start(extension, request)
     }
 
     private val promptDelegate = object : WebExtensionController.PromptDelegate {
@@ -285,13 +403,24 @@ class ExtensionManager(private val core: BrowserCore) {
 
     private val actionDelegate = object : WebExtension.ActionDelegate {
         override fun onBrowserAction(extension: WebExtension, session: GeckoSession?, action: WebExtension.Action) {
-            if (session != null) return   // tab-specific override; the menu shows the default action
+            // v2.1.8 (defect 3): a session-specific override used to be discarded here, which threw
+            // away every tab-scoped badge/title/icon. The default still lands in `_actions`; the
+            // override is kept per session and merged back by actionsFor().
+            if (session != null) {
+                sessionActions.getOrPut(extension.id) { HashMap() }[session] = action
+                host?.onExtensionsChanged()
+                return
+            }
             _actions.value = _actions.value + (extension.id to ExtensionAction(extension, action))
             host?.onExtensionsChanged()
         }
 
         override fun onPageAction(extension: WebExtension, session: GeckoSession?, action: WebExtension.Action) {
-            if (session != null) return
+            if (session != null) {
+                sessionActions.getOrPut(extension.id) { HashMap() }[session] = action
+                host?.onExtensionsChanged()
+                return
+            }
             if (!_actions.value.containsKey(extension.id)) {
                 _actions.value = _actions.value + (extension.id to ExtensionAction(extension, action))
                 host?.onExtensionsChanged()
@@ -302,11 +431,26 @@ class ExtensionManager(private val core: BrowserCore) {
 
         override fun onOpenPopup(extension: WebExtension, action: WebExtension.Action): GeckoResult<GeckoSession>? = openPopup(extension)
 
+        /**
+         * v2.1.8 (Q3a): this used to always build a fresh popup session, so a second click stacked
+         * another sheet on top of the open one and there was no way to dismiss it by clicking again.
+         *
+         * Returning null is the documented contract - both `onTogglePopup` and `onOpenPopup` are
+         * annotated `@return ... null if no popup will be displayed`, and the package-private
+         * `WebExtension.Action.openPopup(popup, uri)` starts with `if (popup == null) return`. Gecko
+         * therefore shows nothing, and our side has already closed the surface that was up.
+         */
         private fun openPopup(extension: WebExtension): GeckoResult<GeckoSession>? {
             val h = host ?: return null
+            if (h.isExtensionPopupOpen()) {
+                h.dismissExtensionPopup()
+                if (EXTDBG) AppLog.d(EXTDBG_TAG, "popup toggled closed ext=${extension.id}")
+                return null
+            }
             val popup = GeckoSession()
             popup.open(core.engine.runtime)
             h.showExtensionPopup(extension, popup)
+            if (EXTDBG) AppLog.d(EXTDBG_TAG, "popup opened ext=${extension.id}")
             return GeckoResult.fromValue(popup)
         }
     }

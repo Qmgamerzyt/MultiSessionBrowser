@@ -1,8 +1,12 @@
 package app.multisession.browser.engine
 
 import android.net.Uri
+import android.widget.Toast
+import app.multisession.browser.R
 import app.multisession.browser.core.AppLog
 import app.multisession.browser.core.BrowserCore
+import app.multisession.browser.extensions.EXTDBG
+import app.multisession.browser.extensions.EXTDBG_TAG
 import app.multisession.browser.permissions.PermissionValue
 import app.multisession.browser.permissions.SitePermissionStore
 import app.multisession.browser.permissions.SitePermissionType
@@ -205,6 +209,10 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
             try { response.body?.close() } catch (_: Throwable) {}
             if (em.host == null) {   // no foreground UI for the permission prompt: installing would be auto-denied
                 AppLog.i(TAG, "Extension install ignored (no foreground UI): $url")
+                if (EXTDBG) AppLog.d(EXTDBG_TAG, "install dropped, host==null")
+                // v2.1.8: this was a silent drop, so tapping an .xpi link looked like the browser
+                // had done nothing. Point at the screen where the install can actually happen.
+                Toast.makeText(core.app, R.string.ext_install_no_ui, Toast.LENGTH_LONG).show()
                 return
             }
             AppLog.i(TAG, "Intercepted extension download: $url")
