@@ -51,7 +51,7 @@ class BrowserCore(val app: Application) {
     /** True once a preference changed; TabManager.reapplySettings() only touches the engine when set. */
     @Volatile var settingsDirty = false
     private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key != Prefs.KEY_ACTIVE_SESSION && key != Prefs.KEY_HUD_ITEMS) settingsDirty = true
+        if (key != Prefs.KEY_ACTIVE_SESSION) settingsDirty = true
     }
 
     init {

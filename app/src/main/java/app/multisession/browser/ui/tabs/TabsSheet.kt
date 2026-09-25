@@ -1,10 +1,13 @@
 package app.multisession.browser.ui.tabs
 
 import android.content.res.Configuration
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
@@ -14,6 +17,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.TextView
+import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.ItemTouchHelper
@@ -124,6 +128,9 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
         recycler.setHasFixedSize(false)
         recycler.setItemViewCacheSize(12)
         touchHelper.attachToRecyclerView(recycler)
+        // v2.1.7 (issues O/P): observe the gesture for swipe + hold-to-group without changing how the
+        // events are delivered (always false -> RecyclerView/ItemTouchHelper see every event as before).
+        recycler.setOnTouchListener(dragFingerListener)
 
         view.findViewById<View>(R.id.newTabButton).setOnClickListener { browser?.newTab(); dismiss() }
         view.findViewById<View>(R.id.newGroupButton).setOnClickListener { v ->
@@ -216,16 +223,93 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
         return Section.OTHER
     }
 
-    // ------------------------------------------------------------------ drag & drop
+    // ------------------------------------------------------------------ drag & drop / swipe (v2.1.7)
+
+    /** Finger tracking while a drag runs (issue P: ItemTouchHelper reports positions, never "on vs beside"). */
+    private var dragHolder: RecyclerView.ViewHolder? = null
+    private var fingerSeen = false
+    private var fingerX = 0f
+    private var fingerY = 0f
+    private var groupTargetId: String? = null
+    private var groupTargetCard: MaterialCardView? = null
+    private val holdGroupRunnable = Runnable { evaluateGroupTarget() }
+    private val swipePaint = Paint().apply { color = 0x33E53935 }   // translucent red behind a swiping card
+
+    private fun resetHoldTimer() { recycler.removeCallbacks(holdGroupRunnable); recycler.postDelayed(holdGroupRunnable, HOLD_GROUP_MS) }
+    private fun cancelHoldTimer() { recycler.removeCallbacks(holdGroupRunnable) }
+    private fun clearGroupTarget() { groupTargetCard?.let { it.strokeWidth = 0 }; groupTargetCard = null; groupTargetId = null }
+
+    /**
+     * Observes the gesture while ItemTouchHelper is dragging and re-arms the 600 ms hold timer as soon
+     * as the finger moves. Always returns false: RecyclerView keeps the events exactly as before
+     * (ItemTouchHelper installs its own OnItemTouchListener, not an OnTouchListener).
+     */
+    private val dragFingerListener = View.OnTouchListener { _, ev ->
+        if (dragHolder != null) {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_MOVE -> {
+                    val moved = kotlin.math.abs(ev.x - fingerX) > 6 || kotlin.math.abs(ev.y - fingerY) > 6
+                    fingerX = ev.x; fingerY = ev.y; fingerSeen = true
+                    if (moved) { clearGroupTarget(); resetHoldTimer() }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { cancelHoldTimer(); clearGroupTarget() }
+                else -> Unit
+            }
+        }
+        false
+    }
+
+    /** The hold elapsed: is the finger resting on a DIFFERENT tab? Then that tab is the group target. */
+    private fun evaluateGroupTarget() {
+        val dragged = dragHolder ?: return
+        if (!fingerSeen) return
+        val under = recycler.findChildViewUnder(fingerX, fingerY) ?: return
+        if (under === dragged.itemView) return                 // resting on its own slot = ordinary reorder
+        val vh = recycler.getChildViewHolder(under) as? CardVH ?: return
+        val pos = vh.bindingAdapterPosition
+        if (pos == RecyclerView.NO_POSITION) return
+        val card = adapter.rows.getOrNull(pos) as? Row.Card ?: return
+        if (card.tab.id == groupTargetId) return
+        clearGroupTarget()
+        groupTargetId = card.tab.id
+        (under as? MaterialCardView)?.let { c ->
+            c.strokeColor = ContextCompat.getColor(requireContext(), R.color.brand_primary)
+            c.strokeWidth = (3 * resources.displayMetrics.density).toInt()
+            groupTargetCard = c
+        }
+    }
+
+    /**
+     * v2.1.7 (issue P): dropping a tab after holding it over another tab groups the two. The target
+     * already having a group wins (the dragged tab joins it); otherwise the dragged tab's group is
+     * reused; only then is a new group created (same default name/colour as the group dialog).
+     */
+    private fun groupByDrag(draggedId: String, targetId: String) {
+        val sid = sessionId ?: return
+        val dragged = core.tabs.get(draggedId) ?: return
+        val target = core.tabs.get(targetId) ?: return
+        if (dragged.id == target.id) return
+        val gid = target.groupId ?: dragged.groupId
+            ?: core.tabs.createGroup(sid, getString(R.string.group_default_name), 0xFF2962FF.toInt()).id
+        core.tabs.setTabsGroup(listOf(draggedId, targetId), gid)
+        adapter.dirty = false
+        rebuild()
+        browser?.snack(getString(R.string.group_created))
+    }
 
     private val touchHelper = ItemTouchHelper(object : ItemTouchHelper.Callback() {
         override fun getMovementFlags(rv: RecyclerView, vh: RecyclerView.ViewHolder): Int {
             if (vh !is CardVH || selectionMode) return 0
-            return makeMovementFlags(ItemTouchHelper.UP or ItemTouchHelper.DOWN or ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT, 0)
+            val card = adapter.rows.getOrNull(vh.bindingAdapterPosition) as? Row.Card
+            // v2.1.7 (issue O): swipe-to-close, but never for a pinned tab - those must not vanish by accident.
+            val swipe = if (card?.tab?.pinned == true) 0 else ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT
+            return makeMovementFlags(ItemTouchHelper.UP or ItemTouchHelper.DOWN or ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT, swipe)
         }
         override fun isLongPressDragEnabled() = !selectionMode
-        override fun isItemViewSwipeEnabled() = false
+        override fun isItemViewSwipeEnabled() = !selectionMode
         override fun onMove(rv: RecyclerView, from: RecyclerView.ViewHolder, to: RecyclerView.ViewHolder): Boolean {
+            // Any reorder cancels the pending hold: the user is moving, not resting on a tab.
+            cancelHoldTimer(); clearGroupTarget()
             val f = from.bindingAdapterPosition; val t = to.bindingAdapterPosition
             if (f == RecyclerView.NO_POSITION || t == RecyclerView.NO_POSITION) return false
             if (t == 0 && adapter.rows[0] is Row.Header) return false   // nothing above the first header
@@ -235,15 +319,42 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
             if ((targetSection == Section.PINNED) != card.tab.pinned) return false   // pinned stays pinned, normal stays normal
             adapter.move(f, t); return true
         }
-        override fun onSwiped(vh: RecyclerView.ViewHolder, direction: Int) {}
+        override fun onSwiped(vh: RecyclerView.ViewHolder, direction: Int) {
+            val card = adapter.rows.getOrNull(vh.bindingAdapterPosition) as? Row.Card
+            cancelHoldTimer(); clearGroupTarget(); dragHolder = null; fingerSeen = false
+            // v2.1.7 (issue O): a swipe closes the tab immediately and offers Undo - no dialog, the
+            // gesture itself is the confirmation (Chrome/Firefox Android behave the same).
+            if (card != null) {
+                val b = browser
+                if (b != null) b.closeTab(card.tab, undo = true) else core.tabs.closeTab(card.tab.id)
+            }
+            rebuild()
+        }
         override fun clearView(rv: RecyclerView, vh: RecyclerView.ViewHolder) {
             super.clearView(rv, vh)
             vh.itemView.alpha = 1f; vh.itemView.scaleX = 1f; vh.itemView.scaleY = 1f
-            if (adapter.dirty) { adapter.dirty = false; commitOrder() }
+            val pos = vh.bindingAdapterPosition
+            val draggedId = if (pos == RecyclerView.NO_POSITION) null else (adapter.rows.getOrNull(pos) as? Row.Card)?.tab?.id
+            val targetId = groupTargetId
+            cancelHoldTimer(); clearGroupTarget(); dragHolder = null; fingerSeen = false
+            when {
+                targetId != null && draggedId != null && draggedId != targetId -> groupByDrag(draggedId, targetId)
+                adapter.dirty -> { adapter.dirty = false; commitOrder() }
+            }
         }
         override fun onSelectedChanged(vh: RecyclerView.ViewHolder?, actionState: Int) {
             super.onSelectedChanged(vh, actionState)
-            if (actionState == ItemTouchHelper.ACTION_STATE_DRAG) vh?.itemView?.apply { alpha = 0.9f; scaleX = 1.04f; scaleY = 1.04f }
+            if (actionState == ItemTouchHelper.ACTION_STATE_DRAG) {
+                dragHolder = vh; fingerSeen = false
+                clearGroupTarget(); resetHoldTimer()
+                vh?.itemView?.apply { alpha = 0.9f; scaleX = 1.04f; scaleY = 1.04f }
+            }
+        }
+        override fun onChildDraw(c: Canvas, rv: RecyclerView, vh: RecyclerView.ViewHolder, dX: Float, dY: Float, actionState: Int, isCurrentlyActive: Boolean) {
+            if (actionState == ItemTouchHelper.ACTION_STATE_SWIPE && dX != 0f) {
+                c.drawRect(0f, vh.itemView.top.toFloat(), rv.width.toFloat(), vh.itemView.bottom.toFloat(), swipePaint)
+            }
+            super.onChildDraw(c, rv, vh, dX, dY, actionState, isCurrentlyActive)
         }
     })
 
@@ -291,7 +402,12 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
     private fun closeSelected() {
         val ids = selected.toList()
         if (ids.isEmpty()) { browser?.snack(getString(R.string.nothing_selected)); return }
-        val doClose = { browser?.onTabsClosed(core.tabs.closeTabs(ids)); setSelectionMode(false) }
+        val doClose = {
+            val closed = core.tabs.closeTabs(ids)
+            browser?.onTabsClosed(closed)
+            browser?.offerUndo(closed)          // v2.1.7 (issue I): confirmation stays, Undo added
+            setSelectionMode(false)
+        }
         if (ids.size == 1) doClose() else MaterialAlertDialogBuilder(requireContext())
             .setTitle(getString(R.string.close_tabs_fmt, ids.size)).setMessage(R.string.confirm)
             .setPositiveButton(R.string.close_tab) { _, _ -> doClose() }
@@ -301,7 +417,21 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
     private fun archiveSelected() = withSelection { ids ->
         val archived = core.tabs.archiveTabs(ids)
         browser?.onTabsClosed(archived)
-        browser?.snack(getString(R.string.tabs_archived_fmt, archived.size))
+        offerArchiveUndo(archived)
+    }
+
+    /**
+     * Archiving is fully reversible, so v2.1.7 (issue I) swaps the plain toast for a Snackbar with
+     * Undo: [TabManager.unarchiveTabs] brings the same tabs back, they stay in their group and pinned
+     * state, and their session is untouched. The sheet refreshes itself through [onTabsChanged].
+     */
+    private fun offerArchiveUndo(archived: List<Tab>) {
+        if (archived.isEmpty()) return
+        val ids = archived.map { it.id }
+        browser?.snackUndo(getString(R.string.tabs_archived_fmt, archived.size)) {
+            core.tabs.unarchiveTabs(ids)
+            snack(getString(R.string.tabs_unarchived_fmt, ids.size))
+        }
     }
 
     private fun moveSelected(anchor: View) {
@@ -378,9 +508,9 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
                 1 -> core.tabs.setPinned(listOf(tab.id), !tab.pinned)
                 2 -> pickGroup(anchor, sid) { gid -> core.tabs.setTabGroup(tab.id, gid) }
                 3 -> core.tabs.setTabGroup(tab.id, null)
-                4 -> { browser?.onTabsClosed(core.tabs.archiveTabs(listOf(tab.id))); browser?.snack(getString(R.string.tabs_archived_fmt, 1)) }
+                4 -> { val a = core.tabs.archiveTabs(listOf(tab.id)); browser?.onTabsClosed(a); offerArchiveUndo(a) }
                 5 -> { setSelectionMode(true); toggleSelection(tab) }
-                6 -> { browser?.closeTab(tab) ?: core.tabs.closeTab(tab.id); rebuild() }
+                6 -> { browser?.closeTab(tab, undo = true) ?: core.tabs.closeTab(tab.id); rebuild() }
             }
             true
         }
@@ -402,9 +532,9 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
                 R.id.action_group_rename -> GroupEditDialog.show(anchor, g) { name, color -> core.tabs.renameGroup(g.id, name, color) }
                 R.id.action_group_up -> core.tabs.moveGroup(g.sessionId, idx, idx - 1)
                 R.id.action_group_down -> core.tabs.moveGroup(g.sessionId, idx, idx + 1)
-                R.id.action_group_close_tabs -> { val closed = core.tabs.closeGroupTabs(g.id); browser?.onTabsClosed(closed) }
+                R.id.action_group_close_tabs -> { val closed = core.tabs.closeGroupTabs(g.id); browser?.onTabsClosed(closed); browser?.offerUndo(closed) }
                 R.id.action_group_ungroup -> core.tabs.ungroup(g.id)
-                ID_GROUP_ARCHIVE -> { val a = core.tabs.archiveTabs(core.tabs.tabsInGroup(g.id).map { it.id }); browser?.onTabsClosed(a); browser?.snack(getString(R.string.tabs_archived_fmt, a.size)) }
+                ID_GROUP_ARCHIVE -> { val a = core.tabs.archiveTabs(core.tabs.tabsInGroup(g.id).map { it.id }); browser?.onTabsClosed(a); offerArchiveUndo(a) }
                 R.id.action_group_delete -> MaterialAlertDialogBuilder(requireContext())
                     .setTitle(R.string.delete_group_and_tabs)
                     .setMessage(getString(R.string.delete_group_confirm, g.name, core.tabs.tabsInGroup(g.id).size))
@@ -529,12 +659,14 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
             card.isChecked = sel
             itemView.setOnClickListener { if (selectionMode) toggleSelection(tab) else { browser?.showTab(tab); dismiss() } }
             check.setOnClickListener { toggleSelection(tab) }
-            close.setOnClickListener { browser?.closeTab(tab) ?: core.tabs.closeTab(tab.id); rebuild() }
+            close.setOnClickListener { browser?.closeTab(tab, undo = true) ?: core.tabs.closeTab(tab.id); rebuild() }
             more.setOnClickListener { showTabMenu(it, tab) }
         }
     }
 
     private companion object {
         const val ID_GROUP_ARCHIVE = 9101
+        /** v2.1.7 (issue P): how long the finger must rest on another tab before a release groups them. */
+        const val HOLD_GROUP_MS = 600L
     }
 }

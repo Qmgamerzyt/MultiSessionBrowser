@@ -95,13 +95,9 @@ class ExtensionsActivity : AppCompatActivity(), ExtensionHost {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         when (item.itemId) {
             R.id.action_amo_find -> amoSearch()
-            R.id.action_install_url -> {
-                val input = EditText(this).apply { hint = getString(R.string.ext_url_hint); setSingleLine() }
-                MaterialAlertDialogBuilder(this).setTitle(R.string.ext_install_url).setView(input)
-                    .setPositiveButton(R.string.import_action) { _, _ -> em.install(input.text.toString()) { r -> report(r) } }
-                    .setNegativeButton(android.R.string.cancel, null).show()
-            }
+            R.id.action_install_url -> installFromInput()
             R.id.action_install_file -> pickXpi.launch(arrayOf("application/x-xpinstall", "application/zip", "application/octet-stream", "*/*"))
+            R.id.action_browse_amo -> openInBrowser(AMO_HOME)
             R.id.action_ext_limits -> MaterialAlertDialogBuilder(this).setTitle(R.string.ext_limits_title).setMessage(R.string.ext_limits_body).setPositiveButton(android.R.string.ok, null).show()
             else -> return super.onOptionsItemSelected(item)
         }
@@ -111,6 +107,41 @@ class ExtensionsActivity : AppCompatActivity(), ExtensionHost {
     private fun report(r: Result<WebExtension>) {
         r.onSuccess { snack(getString(R.string.ext_installed, it.metaData.name ?: it.id)) }
             .onFailure { AppLog.w("Extensions", "install failed", it); snack(getString(R.string.ext_install_failed, installErrorMessage(this, it))) }
+    }
+
+    /**
+     * v2.1.7 (issue B): "Add extension" accepts an addons.mozilla.org address, not just a raw .xpi.
+     *
+     * Pasting an AMO add-on page used to be handed to Gecko as-is, so the install failed on the HTML
+     * document instead of the add-on. The slug is now resolved through the public AMO v5 API and the
+     * resulting dialog installs `current_version.file.url`, which still goes through the unchanged
+     * [ExtensionManager.install] path: Gecko validates the manifest and the Mozilla signature, and
+     * nothing is spoofed or bypassed. Anything that is neither an AMO page nor a bare slug keeps the
+     * old behaviour (direct .xpi URL).
+     */
+    private fun installFromInput() {
+        val input = EditText(this).apply { hint = getString(R.string.ext_url_hint); setSingleLine() }
+        MaterialAlertDialogBuilder(this).setTitle(R.string.ext_install_url).setView(input)
+            .setPositiveButton(R.string.import_action) { _, _ ->
+                val value = input.text.toString().trim()
+                val slug = AmoApi.slugFromPage(value) ?: value.takeIf { AMO_SLUG.matches(it) }
+                if (slug == null) em.install(value) { r -> report(r) } else amoFromSlug(slug)
+            }
+            .setNegativeButton(android.R.string.cancel, null).show()
+    }
+
+    /** Resolves one add-on (slug or AMO page) off the main thread, then shows the standard detail/install dialog. */
+    private fun amoFromSlug(slug: String) {
+        lifecycleScope.launch {
+            val res = runCatching { withContext(Dispatchers.IO) { AmoApi.detail(slug) } }
+            if (isFinishing || isDestroyed) return@launch
+            val addon = res.getOrNull()
+            if (addon == null) {
+                AppLog.w("Extensions", "AMO detail failed for $slug", res.exceptionOrNull())
+                snack(getString(R.string.ext_amo_error)); return@launch
+            }
+            amoDetail(addon)
+        }
     }
 
     // ================================================================== AMO browse
@@ -214,16 +245,83 @@ class ExtensionsActivity : AppCompatActivity(), ExtensionHost {
 
     private fun snack(s: String) = Snackbar.make(findViewById(R.id.recycler), s, Snackbar.LENGTH_LONG).show()
 
+    private companion object {
+        /** AMO slugs are lowercase letters, digits and dashes (same rule as [AmoApi.detail] enforces). */
+        val AMO_SLUG = Regex("^[a-z0-9-]+$")
+
+        /** Official Firefox Add-ons catalog for Android (opened by the toolbar entry). */
+        const val AMO_HOME = "https://addons.mozilla.org/android/"
+    }
+
+    /**
+     * v2.1.7 (issue C): add-on details straight from `WebExtension.MetaData` - description, version,
+     * author, required permissions and the stable add-on id Gecko installed under. No extra request is
+     * made and nothing is invented; when the add-on publishes an AMO or homepage address the dialog
+     * links to it in a browser tab.
+     */
+    private fun showDetails(ext: WebExtension) {
+        val m = ext.metaData
+        val msg = buildString {
+            if (!m.description.isNullOrBlank()) { append(m.description.trim()); append("\n\n") }
+            append(getString(R.string.ext_amo_version, m.version ?: "?"))
+            if (!m.creatorName.isNullOrBlank()) append(" \u00b7 ").append(m.creatorName)
+            if (!m.requiredPermissions.isNullOrEmpty()) {
+                append("\n\n")
+                append(getString(R.string.ext_amo_permissions, m.requiredPermissions.joinToString("\n") { "\u2022 $it" }))
+            }
+            append("\n\n").append(getString(R.string.ext_details_id, ext.id))
+        }
+        val listing = m.amoListingUrl ?: m.homepageUrl
+        val builder = MaterialAlertDialogBuilder(this)
+            .setTitle(m.name ?: ext.id)
+            .setMessage(msg)
+            .setPositiveButton(android.R.string.ok, null)
+        if (!listing.isNullOrBlank()) builder.setNeutralButton(R.string.ext_browse_amo) { _, _ -> openInBrowser(listing) }
+        builder.show()
+    }
+
+    /**
+     * v2.1.7 (issue C): asks Gecko for a newer build of an installed add-on. The version Gecko
+     * reports afterwards decides the message, so "No update available" really means nothing changed
+     * and "Add-on updated" really means a signed new version was installed.
+     */
+    private fun checkForUpdate(ext: WebExtension) {
+        val before = ext.metaData.version
+        snack(getString(R.string.ext_update_checking))
+        em.checkUpdate(ext) { r ->
+            // GeckoResult callbacks are not contractually on the main thread; every snack is posted.
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                r.onSuccess { updated ->
+                    val after = updated.metaData.version
+                    snack(if (after != null && after != before) getString(R.string.ext_update_done) else getString(R.string.ext_no_update))
+                }
+                r.onFailure { AppLog.w("Extensions", "update check failed", it); snack(getString(R.string.ext_update_error)) }
+            }
+        }
+    }
+
+    /** Hands a URL to BrowserActivity (the same mechanism this screen already uses for options pages). */
+    private fun openInBrowser(url: String) {
+        setResult(RESULT_OK, Intent().putExtra(SimpleListActivity.EXTRA_OPEN_URL, url).putExtra(SimpleListActivity.EXTRA_IN_NEW_TAB, true))
+        finish()
+    }
+
     private fun showMore(anchor: View, ext: WebExtension) {
         val popup = PopupMenu(this, anchor)
         if (ext.metaData.optionsPageUrl != null) popup.menu.add(0, 1, 0, R.string.ext_options)
+        // v2.1.7 (issue C): what this add-on is, and a manual update check.
+        popup.menu.add(0, 4, 1, R.string.ext_details)
+        popup.menu.add(0, 5, 2, R.string.ext_update_check)
         // Gecko defaults this to false, which keeps an add-on out of our private sessions (they run
         // with usePrivateMode) until the user opts in here.
-        popup.menu.add(0, 3, 1, R.string.ext_private).apply { isCheckable = true; isChecked = ext.metaData.allowedInPrivateBrowsing }
-        popup.menu.add(0, 2, 2, R.string.ext_uninstall)
+        popup.menu.add(0, 3, 3, R.string.ext_private).apply { isCheckable = true; isChecked = ext.metaData.allowedInPrivateBrowsing }
+        popup.menu.add(0, 2, 4, R.string.ext_uninstall)
         popup.setOnMenuItemClickListener {
             when (it.itemId) {
                 1 -> { setResult(RESULT_OK, Intent().putExtra(SimpleListActivity.EXTRA_OPEN_URL, ext.metaData.optionsPageUrl).putExtra(SimpleListActivity.EXTRA_IN_NEW_TAB, true)); finish() }
+                4 -> showDetails(ext)
+                5 -> checkForUpdate(ext)
                 3 -> em.setAllowedInPrivateBrowsing(ext, !ext.metaData.allowedInPrivateBrowsing) { e -> if (e != null) snack(e.message ?: "error") }
                 2 -> MaterialAlertDialogBuilder(this).setTitle(R.string.ext_uninstall).setMessage(getString(R.string.ext_uninstall_confirm, ext.metaData.name ?: ext.id))
                     .setPositiveButton(R.string.ext_uninstall) { _, _ -> em.uninstall(ext) { e -> if (e != null) snack(e.message ?: "error") } }

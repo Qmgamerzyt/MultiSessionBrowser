@@ -212,6 +212,8 @@ class AppDownloadManager(private val core: BrowserCore) {
             val cur = _downloads.value
             _downloads.value = if (cur.any { it.id == d.id }) cur.map { if (it.id == d.id) d else it } else listOf(d) + cur
             core.persist { core.repo.downloads.upsert(d) }
+            // v2.1.7 (issue E): Android notifications for progress / finished / failed downloads.
+            DownloadNotifier.onDownloadChanged(core.app, d)
         }
     }
 

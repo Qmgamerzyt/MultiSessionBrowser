@@ -46,6 +46,20 @@
                 android:background="?attr/colorSurfaceContainer"
                 android:orientation="vertical">
 
+                <!-- v2.1.7 (issue E): live download progress inside the app (replaces the transient
+                     "Download started" snackbar). Part of the chrome: it hides with the toolbar. -->
+                <TextView
+                    android:id="@+id/downloadBanner"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@color/banner_bg"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:padding="10dp"
+                    android:textColor="@color/banner_text"
+                    android:textSize="12sp"
+                    android:visibility="gone" />
+
                 <LinearLayout
                     android:id="@+id/controlsRow"
                     android:layout_width="match_parent"
@@ -82,6 +96,9 @@
 
                     <ImageButton android:id="@+id/backButton" style="@style/CompactBarButton" android:contentDescription="@string/back" android:src="@drawable/ic_arrow_back" />
                     <ImageButton android:id="@+id/forwardButton" style="@style/CompactBarButton" android:contentDescription="@string/forward" android:src="@drawable/ic_arrow_forward" />
+                    <!-- v2.1.7: Home navigates the current tab to the configured homepage / start page
+                         (never creates a tab, never steals focus - see BrowserActivity). -->
+                    <ImageButton android:id="@+id/homeButton" style="@style/CompactBarButton" android:contentDescription="@string/home" android:src="@drawable/ic_home" />
                     <TextView
                         android:id="@+id/sessionName"
                         android:layout_width="0dp"
@@ -172,6 +189,7 @@
                 android:layout_height="3dp"
                 android:max="100"
                 android:progressTint="?attr/colorPrimary"
+                android:indeterminateTint="?attr/colorPrimary"
                 android:visibility="gone" />
 
             <FrameLayout
@@ -179,7 +197,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:layout_weight="1">
-                <FrameLayout
+                <!-- v2.1.7 (H): pull-to-refresh container (pull only when the page is at its top). -->
+                <app.multisession.browser.ui.browser.PullRefreshFrameLayout
                     android:id="@+id/webContainer"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent" />
@@ -189,31 +208,22 @@
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
                     android:visibility="gone" />
-                <!-- Floating close-fullscreen button: small draggable button on the right edge while the
-                     toolbar is hidden; tapping it exits fullscreen, and it disappears with fullscreen mode.
-                     Populated/controlled by HudController. -->
+                <!-- v2.1.7: the ONLY way out of fullscreen (HTML5 fullscreen and the hidden-toolbar mode).
+                     Draggable in both axes; tap to exit. Managed by FullscreenExitButton / applyChrome(). -->
                 <ImageButton
-                    android:id="@+id/hudNub"
-                    android:layout_width="44dp"
-                    android:layout_height="44dp"
-                    android:layout_gravity="center_vertical|end"
-                    android:layout_marginEnd="10dp"
-                    android:background="@drawable/bg_hud"
-                    android:contentDescription="@string/hud_exit_fullscreen"
+                    android:id="@+id/fullscreenExitButton"
+                    style="@style/CompactBarButton"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_gravity="bottom|end"
+                    android:layout_marginEnd="14dp"
+                    android:layout_marginBottom="18dp"
+                    android:background="@drawable/bg_exit_fullscreen"
+                    android:contentDescription="@string/fullscreen_exit"
                     android:elevation="6dp"
                     android:src="@drawable/ic_close"
                     android:visibility="gone"
                     app:tint="?attr/colorOnSurface" />
-                <!-- Compact selectable HUD (floating pill, never covers the page). Populated by HudController. -->
-                <include
-                    android:id="@+id/hud"
-                    layout="@layout/view_hud"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_gravity="bottom|end"
-                    android:layout_marginEnd="12dp"
-                    android:layout_marginBottom="16dp"
-                    android:visibility="gone" />
             </FrameLayout>
         </LinearLayout>
     </androidx.coordinatorlayout.widget.CoordinatorLayout>

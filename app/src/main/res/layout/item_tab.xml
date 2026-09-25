@@ -54,7 +54,9 @@
                 android:layout_height="wrap_content"
                 android:minWidth="0dp"
                 android:minHeight="0dp"
-                android:visibility="gone" />
+                android:visibility="gone"
+                android:buttonTint="?attr/colorPrimary"
+                app:checkedIconVisible="false" />
             <ImageButton
                 android:id="@+id/tabMore"
                 android:layout_width="32dp"

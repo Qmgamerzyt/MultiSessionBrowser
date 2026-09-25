@@ -144,10 +144,6 @@
     <string name="pref_user_agent">User agent</string>
     <string name="pref_webview">Web engine (Firefox / GeckoView)</string>
     <string name="pref_zoom">Allow pinch zoom on every page (ignores user-scalable=no)</string>
-    <string name="private_label">Private</string>
-    <string name="private_session">Private session</string>
-    <string name="private_session_explainer">A private session keeps no history and is deleted (with its cookies and site data) when you delete it or the app restarts. It does not hide your activity from websites, your network, or your employer/ISP.</string>
-    <string name="private_session_name">Private</string>
     <string name="project_imported">Project imported</string>
     <string name="project_name">Project name</string>
     <string name="project_subtitle">Entry: %1$s · %2$d files</string>

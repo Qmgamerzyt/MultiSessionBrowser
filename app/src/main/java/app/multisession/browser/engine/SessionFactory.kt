@@ -42,6 +42,7 @@ object SessionFactory {
         gs.contentDelegate = d
         gs.permissionDelegate = d
         gs.mediaSessionDelegate = d       // play/pause state -> tabs playing media are not hibernated automatically
+        gs.scrollDelegate = d             // scroll offset -> pull-to-refresh only at the very top (v2.1.7)
         gs.promptDelegate = BrowserPromptDelegate(core, tab)
         core.extensions.attachToSession(gs, tab)   // browser.tabs.remove/update + per-tab actions for installed extensions
     }

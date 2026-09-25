@@ -72,7 +72,7 @@ class SessionManager(private val core: BrowserCore) {
 
     suspend fun create(name: String, color: Int, isPrivate: Boolean = false, select: Boolean = true): SessionEntity {
         val finalName = name.trim().ifEmpty {
-            core.app.getString(if (isPrivate) R.string.private_session_name else R.string.default_session_name)
+            core.app.getString(if (isPrivate) R.string.incognito_session_name else R.string.default_session_name)
         }
         val order = (_sessions.value.maxOfOrNull { it.sortOrder } ?: 0) + 1
         val s = newEntity(finalName, color, isPrivate, order)

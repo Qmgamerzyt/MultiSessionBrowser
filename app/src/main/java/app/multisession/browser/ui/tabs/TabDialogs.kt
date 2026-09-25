@@ -57,7 +57,13 @@ object TabDialogs {
                     onRestored(core.tabs.reopenClosedTab(sessionId, tabs[which - groups.size].id))
                 }
             }
-            .setNeutralButton(R.string.clear_list) { _, _ -> core.tabs.clearRecentlyClosed(sessionId) }
+            // v2.1.7 (issue I): "Clear list" is final - the tabs are gone afterwards - so it gets the
+            // same confirmation every other destructive action has instead of firing on one tap.
+            .setNeutralButton(R.string.clear_list) { _, _ ->
+                MaterialAlertDialogBuilder(activity).setTitle(R.string.clear_list).setMessage(R.string.clear_list_confirm)
+                    .setPositiveButton(R.string.clear) { _, _ -> core.tabs.clearRecentlyClosed(sessionId) }
+                    .setNegativeButton(android.R.string.cancel, null).show()
+            }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
     }

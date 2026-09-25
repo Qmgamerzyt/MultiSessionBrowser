@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v2.1.7: bottom-HUD removal, compact fullscreen-exit control, address bar / progress fixes,
+     pull-to-refresh, download notifications, context menu + selection actions, tab-grid gestures,
+     "Add extension" (official Firefox Add-ons site), extension details/updates, Incognito naming
+     and the active-Incognito notification, confirmation/undo audit. -->
+<resources>
+    <!-- chrome / fullscreen / home -->
+    <string name="hide_toolbar">Hide toolbar</string>
+    <string name="fullscreen_exit">Exit fullscreen</string>
+    <string name="home">Home</string>
+    <string name="scroll_top">Scroll to top</string>
+    <string name="scroll_bottom">Scroll to bottom</string>
+    <string name="share_page">Share page</string>
+    <string name="share_app">Share app</string>
+    <string name="share_none">No app available to share</string>
+    <string name="tab_closed">Tab closed</string>
+    <string name="tabs_unarchived_fmt">%1$d tab(s) restored</string>
+    <string name="tabs_closed_count_fmt">%1$d tabs closed</string>
+
+    <!-- downloads: Android notifications + top banner -->
+    <string name="dl_channel_progress">Downloads in progress</string>
+    <string name="dl_channel_progress_desc">Progress of files the browser is downloading</string>
+    <string name="dl_channel_done">Finished downloads</string>
+    <string name="dl_channel_done_desc">Downloads that finished, failed or were cancelled</string>
+    <string name="dl_notif_downloading">Downloading %1$s</string>
+    <string name="dl_notif_done">Downloaded %1$s</string>
+    <string name="dl_notif_failed">Download failed: %1$s</string>
+    <string name="dl_notif_text">Tap to see all downloads</string>
+    <string name="dl_banner">Downloading %1$s</string>
+    <string name="dl_banner_more">+%1$d more</string>
+
+    <!-- long-press context menu -->
+    <string name="open_in_background_tab">Open in background tab</string>
+    <string name="open_in_this_tab">Open in this tab</string>
+    <string name="copy_image_address">Copy image address</string>
+    <string name="share_image">Share image</string>
+    <string name="open_image_this_tab">Open image in this tab</string>
+    <string name="download_linked_file">Download linked file</string>
+    <string name="open_media_new_tab">Open media in new tab</string>
+    <string name="save_media">Save media</string>
+    <string name="copy_media_address">Copy media address</string>
+    <string name="share_media_address">Share media address</string>
+    <string name="media_play">Play</string>
+    <string name="media_pause">Pause</string>
+    <string name="search_web">Search the web</string>
+
+    <!-- tab grid -->
+    <string name="group_created">Tabs grouped</string>
+
+    <!-- extensions -->
+    <string name="ext_add">Add extension</string>
+    <string name="ext_browse_amo">Browse Firefox Add-ons</string>
+    <string name="ext_update_check">Check for updates</string>
+    <string name="ext_no_update">No update available</string>
+    <string name="ext_update_done">Add-on updated</string>
+    <string name="ext_details">Details</string>
+    <string name="ext_details_id">ID: %1$s</string>
+    <string name="ext_update_checking">Checking for updates…</string>
+    <string name="ext_update_error">Update check failed</string>
+
+    <!-- Incognito -->
+    <string name="incognito_label">Incognito</string>
+    <string name="incognito_session">Incognito session</string>
+    <string name="incognito_session_name">Incognito</string>
+    <string name="incognito_session_explainer">An Incognito session keeps no history and is deleted (with its cookies and site data) when you delete it or the app restarts. It does not hide your activity from websites, your network, or your employer/ISP.</string>
+    <string name="incognito_channel">Incognito session</string>
+    <string name="incognito_channel_desc">Shown while an Incognito session is active</string>
+    <string name="incognito_active_title">Incognito session active</string>
+    <string name="incognito_active_msg">Pages opened here are not added to history. Close the session to delete its cookies and site data.</string>
+    <string name="incognito_close">Tap to close</string>
+
+    <!-- confirmation / undo audit -->
+    <string name="clear_list_confirm">Clear the list of recently closed tabs? They cannot be restored afterwards.</string>
+</resources>

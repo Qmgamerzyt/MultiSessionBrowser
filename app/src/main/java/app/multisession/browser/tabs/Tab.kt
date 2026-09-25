@@ -76,6 +76,9 @@ class Tab(val id: String, val sessionId: String, var position: Int) {
     var savedState: GeckoSession.SessionState? = null
     var isLoading: Boolean = false
     var progress: Int = 0
+    /** Vertical scroll offset of the current page (ScrollDelegate.onScrollChanged, v2.1.7 pull-to-refresh).
+     *  Runtime only, never persisted: a fresh page always starts at 0 = "at the very top". */
+    var scrollY: Int = 0
     var error: PageError? = null
     var canGoBack: Boolean = false
     var canGoForward: Boolean = false
@@ -96,10 +99,12 @@ class Tab(val id: String, val sessionId: String, var position: Int) {
     var archivedAt: Long? = null
     /** Live media state (MediaSession delegate): a tab playing audio/video is not hibernated automatically. */
     var isPlayingMedia: Boolean = false
+    /** The page's media session (v2.1.7, issue D): source of the app-menu Play/Pause transport control. */
+    var mediaSession: org.mozilla.geckoview.MediaSession? = null
     /** The page holds a granted camera/microphone stream (WebRTC call): never hibernated automatically. */
     var hasMediaCapture: Boolean = false
     /**
-     * A javascript: URL this app itself asked Gecko to run (bookmarklet / HUD command). NavigationDelegate.onLoadRequest
+     * A javascript: URL this app itself asked Gecko to run (bookmarklet / app-menu command). NavigationDelegate.onLoadRequest
      * lets exactly this one app-initiated javascript: load through and keeps denying every page-initiated one.
      */
     var pendingScript: String? = null

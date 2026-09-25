@@ -21,7 +21,9 @@
     <string name="clear_list">Clear list</string>
     <string name="select_tabs">Select tabs</string>
     <string name="select_all">Select all</string>
-    <string name="clear_selection">Clear</string>
+    <!-- Label of the tab-grid select-all button in its "everything is selected" state: it deselects,
+         it never deletes (v2.1.7: was "Clear", which read like "clear the tabs"). -->
+    <string name="clear_selection">Deselect all</string>
     <string name="selected_fmt">%1$d selected</string>
     <string name="nothing_selected">Nothing selected</string>
     <string name="close_tabs_fmt">Close %1$d tabs?</string>

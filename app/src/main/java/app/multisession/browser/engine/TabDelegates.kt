@@ -25,6 +25,7 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
     GeckoSession.ProgressDelegate,
     GeckoSession.ContentDelegate,
     GeckoSession.PermissionDelegate,
+    GeckoSession.ScrollDelegate,
     MediaSession.Delegate {
 
     private val host: BrowserHost? get() = core.tabs.host
@@ -63,25 +64,40 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
         return when (scheme) {
             "http", "https", "about", "data", "blob", "resource", "moz-extension" -> {
                 if ((scheme == "http" || scheme == "https") && !request.isRedirect) applyDesktopSiteRule(uri)
-                if (scheme == "resource" && !uri.startsWith(LocalContentLoader.BUNDLED_BASE)) GeckoResult.deny() else GeckoResult.allow()
+                if (scheme == "resource" && !uri.startsWith(LocalContentLoader.BUNDLED_BASE)) denyNavigation() else GeckoResult.allow()
             }
             "javascript" -> {
-                // Only the ONE javascript: load this app itself issued (bookmarklet / HUD command, see TabManager.runScript)
+                // Only the ONE javascript: load this app itself issued (bookmarklet / app-menu command, see TabManager.runScript)
                 // may run; every page-initiated javascript: navigation stays denied as before.
                 val pending = tab.pendingScript
                 tab.pendingScript = null
                 if (pending != null && (request.isDirectNavigation || request.uri == pending)) GeckoResult.allow()
-                else { AppLog.i(TAG, "Blocked page-initiated javascript: navigation"); GeckoResult.deny() }
+                else { AppLog.i(TAG, "Blocked page-initiated javascript: navigation"); denyNavigation() }
             }
             "file" -> if (core.localContent.isAllowedLocalUri(uri)) GeckoResult.allow() else {
-                AppLog.i(TAG, "Blocked file:// navigation outside the projects folder"); GeckoResult.deny()
+                AppLog.i(TAG, "Blocked file:// navigation outside the projects folder"); denyNavigation()
             }
             else -> {
                 // intent:, mailto:, tel:, market:, custom app schemes -> the host decides (user gesture required).
                 val consumed = host?.onExternalScheme(tab, Uri.parse(uri), request.hasUserGesture) ?: true
-                if (consumed) GeckoResult.deny() else GeckoResult.allow()
+                if (consumed) denyNavigation() else GeckoResult.allow()
             }
         }
+    }
+
+    /**
+     * v2.1.7 (issue G): a navigation Gecko refuses never reaches onPageStart/onPageStop, so no engine
+     * callback would ever clear the optimistic "loading" state this app set when it issued the
+     * navigation (BrowserActivity.loadInTab / reload). Without this the stop button and the progress
+     * bar stayed in the loading state indefinitely.
+     */
+    private fun denyNavigation(): GeckoResult<AllowOrDeny> {
+        if (tab.isLoading) {
+            tab.isLoading = false
+            tab.progress = 100
+            core.tabs.notifyTabUpdated(tab)
+        }
+        return GeckoResult.deny()
     }
 
     /**
@@ -114,6 +130,7 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
         tab.error = null
         tab.isLoading = true
         tab.progress = 0
+        tab.scrollY = 0            // a new page starts "at the very top" for pull-to-refresh (v2.1.7)
         if (url != "about:blank") tab.url = url
         core.tabs.notifyTabUpdated(tab)
         if (tab.awaitingDisplay) {
@@ -245,11 +262,27 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
         if (h == null) callback.reject() else h.onMediaPermissionRequest(tab, uri, video, audio, callback)
     }
 
+    // ================================================================== ScrollDelegate
+
+    /**
+     * Scroll offset of the page (v2.1.7): BrowserActivity arms pull-to-refresh only while y == 0,
+     * i.e. exactly like Chrome/Firefox Android. Deliberately no listener call per scroll event -
+     * the value is read when the gesture starts.
+     */
+    override fun onScrollChanged(session: GeckoSession, x: Int, y: Int) {
+        tab.scrollY = y
+    }
+
     // ================================================================== MediaSession.Delegate
 
     // Used only for hibernation decisions (a tab playing audio/video is "busy"); playback itself is untouched.
-    override fun onActivated(session: GeckoSession, mediaSession: MediaSession) {}
-    override fun onDeactivated(session: GeckoSession, mediaSession: MediaSession) { tab.isPlayingMedia = false }
+    override fun onActivated(session: GeckoSession, mediaSession: MediaSession) {
+        tab.mediaSession = mediaSession      // v2.1.7 (D): Play/Pause transport control in the app menu
+    }
+    override fun onDeactivated(session: GeckoSession, mediaSession: MediaSession) {
+        tab.isPlayingMedia = false
+        if (tab.mediaSession === mediaSession) tab.mediaSession = null
+    }
     override fun onPlay(session: GeckoSession, mediaSession: MediaSession) { tab.isPlayingMedia = true }
     override fun onPause(session: GeckoSession, mediaSession: MediaSession) { tab.isPlayingMedia = false }
     override fun onStop(session: GeckoSession, mediaSession: MediaSession) { tab.isPlayingMedia = false }

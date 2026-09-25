@@ -240,6 +240,31 @@ class ExtensionManager(private val core: BrowserCore) {
         controller.setAllowedInPrivateBrowsing(ext, allowed).accept({ refresh(); onDone(null) }, { onDone(it) })
     }
 
+    /**
+     * v2.1.7 (issue C): manual "Check for updates". This is `WebExtensionController.update(ext)`
+     * (verified present in GeckoView 155), which resolves with the extension after Gecko has looked
+     * for a newer build on AMO. When one exists Gecko downloads and installs it itself, so the
+     * Mozilla signature check and every other install guarantee run unchanged - this call can only
+     * ever move an add-on to a version Mozilla already signed.
+     *
+     * The result carries the refreshed [WebExtension] (null is reported as a failure, never as
+     * success), so the caller can compare `metaData.version` before and after.
+     */
+    fun checkUpdate(ext: WebExtension, onDone: (Result<WebExtension>) -> Unit) {
+        try {
+            controller.update(ext).accept(
+                { updated ->
+                    refresh()
+                    if (updated == null) onDone(Result.failure(IllegalStateException("update check returned nothing")))
+                    else onDone(Result.success(updated))
+                },
+                { t -> onDone(Result.failure(t ?: IllegalStateException("update check failed"))) },
+            )
+        } catch (t: Throwable) {
+            onDone(Result.failure(t))
+        }
+    }
+
     private val addonDelegate = object : WebExtensionController.AddonManagerDelegate {
         override fun onInstalled(extension: WebExtension) { wire(extension); refresh() }
         override fun onUninstalled(extension: WebExtension) { _actions.value = _actions.value - extension.id; refresh() }

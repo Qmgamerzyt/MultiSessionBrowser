@@ -28,7 +28,7 @@ class MenuEntry(
 
 /**
  * The browser's own menu (right drawer): replaces the Android PopupMenu. Entries are rebuilt every time the drawer
- * opens, so state (bookmark, desktop mode, HUD, download count, extension buttons) is always current.
+ * opens, so state (bookmark, desktop mode, download count, extension buttons) is always current.
  */
 class AppMenu(private val root: View, private val core: BrowserCore) {
 

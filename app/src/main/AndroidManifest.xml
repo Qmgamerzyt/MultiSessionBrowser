@@ -98,6 +98,18 @@
             android:name=".ui.browser.CrashActionReceiver"
             android:exported="false" />
 
+        <!-- Cancel / Resume actions of the download notification (DownloadNotifier, v2.1.7). Explicit
+             intents only, therefore no intent-filter; exported=false keeps it app-private. -->
+        <receiver
+            android:name=".downloads.DownloadActionReceiver"
+            android:exported="false" />
+
+        <!-- "Tap to close" of the Incognito notification (IncognitoNotifier, v2.1.7). Explicit
+             intents only, therefore no intent-filter; exported=false keeps it app-private. -->
+        <receiver
+            android:name=".session.IncognitoCloseReceiver"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

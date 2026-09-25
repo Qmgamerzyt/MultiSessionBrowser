@@ -26,7 +26,6 @@ object Prefs {
     const val KEY_OPEN_EXTERNAL_APPS = "open_external_apps"
     const val KEY_LIVE_TAB_LIMIT = "live_tab_limit"
     const val KEY_ACTIVE_SESSION = "active_session_id"
-    const val KEY_HUD_ITEMS = "hud_items"
     const val KEY_WEBRTC_COMPAT = "webrtc_compat"
     const val KEY_IDLE_HIBERNATE = "idle_hibernate_minutes"
 
@@ -74,22 +73,6 @@ object Prefs {
     var activeSessionId: String?
         get() = sp.getString(KEY_ACTIVE_SESSION, null)
         set(value) = sp.edit().putString(KEY_ACTIVE_SESSION, value).apply()
-
-    /** Comma separated HUD item keys in display order (see ui.browser.HudController).
-     *  Values are filtered to [DEFAULT_HUD_KEYS] so preferences saved by older versions (2.1.2 and
-     *  earlier, which still contained toolbar/menu duplicates) cannot bring the redundant actions back. */
-    var hudItems: List<String>
-        get() = (sp.getString(KEY_HUD_ITEMS, null) ?: DEFAULT_HUD)
-            .split(',').map { it.trim() }
-            .filter { it in DEFAULT_HUD_KEYS }
-            .ifEmpty { DEFAULT_HUD_KEYS }
-        set(value) = sp.edit().putString(KEY_HUD_ITEMS, value.joinToString(",")).apply()
-
-    /** The customizable HUD set: only actions NOT already reachable from the toolbar or the app menu
-     *  (bug fix: de-duplicated). "fullscreen" (the app's toolbar toggle) is excluded from the pill but
-     *  the full original option set is still shown by the fullscreen nub popup (see HudController). */
-    const val DEFAULT_HUD = "top,bottom,closetab"
-    val DEFAULT_HUD_KEYS: List<String> get() = DEFAULT_HUD.split(',')
 
     fun nightMode(): Int = when (sp.getString(KEY_THEME, "system")) {
         "light" -> AppCompatDelegate.MODE_NIGHT_NO

@@ -48,6 +48,7 @@ import app.multisession.browser.BrowserApp
 import app.multisession.browser.R
 import app.multisession.browser.core.AppLog
 import app.multisession.browser.core.Prefs
+import app.multisession.browser.data.db.DownloadEntity
 import app.multisession.browser.core.UrlUtils
 import app.multisession.browser.data.db.BookmarkEntity
 import app.multisession.browser.data.db.SessionEntity
@@ -61,6 +62,7 @@ import app.multisession.browser.extensions.ExtensionAction
 import app.multisession.browser.extensions.ExtensionHost
 import app.multisession.browser.extensions.installErrorMessage
 import app.multisession.browser.permissions.PermissionValue
+import app.multisession.browser.session.IncognitoNotifier
 import app.multisession.browser.permissions.SitePermissionStore
 import app.multisession.browser.permissions.SitePermissionType
 import app.multisession.browser.tabs.PageError
@@ -82,7 +84,6 @@ import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.mozilla.geckoview.BasicSelectionActionDelegate
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSession.PermissionDelegate.ContentPermission
@@ -101,14 +102,15 @@ import java.net.URISyntaxException
  * swapped in/out on tab switch (never destroyed for that). The native start page replaces the
  * GeckoView for empty tabs.
  *
- * v2.0.2 UI: everything is app-owned - a left session drawer, compact back/forward/undo/redo next to it, the
- * central address bar, a tabs button (tab/group sheet), a right app-menu drawer and an optional floating HUD.
+ * v2.0.2 UI: everything is app-owned - a left session drawer, compact back/forward/home next to it, the
+ * central address bar, a tabs button (tab/group sheet), a right app-menu drawer and a floating
+ * fullscreen-exit control (the bottom HUD was removed in v2.1.7).
  *
  * Focus rules (v1.1.2 fix, preserved): the invisible focusHolder is the first focusable view, the
  * URL bar only gains focus from an explicit user tap, and returning to the app never rebuilds or
  * re-attaches the displayed content view - so a focused web input (e.g. OTP field) keeps focus.
  */
-class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabManager.Listener, StartPageController.Callbacks, HudController.Actions {
+class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabManager.Listener, StartPageController.Callbacks {
 
     private val core get() = BrowserApp.core()
     override val activity: AppCompatActivity get() = this
@@ -126,7 +128,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     private lateinit var securityIcon: ImageView
     private lateinit var reloadStopButton: ImageButton
     private lateinit var progressBar: ProgressBar
-    private lateinit var webContainer: FrameLayout
+    private lateinit var webContainer: PullRefreshFrameLayout
     private lateinit var errorPage: View
     private lateinit var backButton: ImageButton
     private lateinit var forwardButton: ImageButton
@@ -135,7 +137,9 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     private lateinit var menuDrawerView: View
     private lateinit var sessionsDrawer: SessionsDrawer
     private lateinit var appMenu: AppMenu
-    private lateinit var hud: HudController
+    private lateinit var fullscreenExit: FullscreenExitButton
+    private lateinit var homeButton: ImageButton
+    private lateinit var downloadBanner: TextView
 
     /** Created lazily and attached to [webContainer] only together with an OPEN session (see attachSession). */
     private var geckoView: GeckoView? = null
@@ -144,8 +148,16 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     private var currentTabId: String? = null
     private var uiReady = false
     private var inFullScreen = false
-    /** Toolbar hidden by the HUD "fullscreen" item (not HTML5 fullscreen). */
+    /** Toolbar hidden by the app menu's "Hide toolbar" item (app-owned fullscreen, not HTML5). */
     private var toolbarHidden = false
+    /**
+     * v2.1.7 (issue F): URL the address bar MUST show for the navigation that was just issued.
+     * [updateToolbar] never rewrites the EditText while it has focus, so if focus could not be handed
+     * back to the invisible holder (IME still up, focus re-assignment deferred) the bar used to keep
+     * the typed text/old URL forever. Navigation sets this once and the first toolbar update consumes
+     * it - focus or no focus.
+     */
+    private var forceToolbarUrl: String? = null
     /** Mirrors the applied system-bar state so [applySystemBars] only talks to the window on change. */
     private var systemBarsHidden = false
     private lateinit var suggestionPopup: SuggestionPopup
@@ -279,6 +291,9 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         activePermissionDialog?.dismiss()
         extensionPopup?.dismiss()
         if (::suggestionPopup.isInitialized) suggestionPopup.dismiss()
+        // v2.1.7 (N): never leave the Incognito notification behind when the task is gone for good.
+        // A configuration change does not finish the Activity, so the notification survives rotation.
+        if (isFinishing) IncognitoNotifier.cancel(this)
         super.onDestroy()
     }
 
@@ -303,6 +318,21 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         reloadStopButton = findViewById(R.id.reloadStopButton)
         progressBar = findViewById(R.id.progressBar)
         webContainer = findViewById(R.id.webContainer)
+        downloadBanner = findViewById(R.id.downloadBanner)
+        downloadBanner.setOnClickListener { openUrlLauncher.launch(Intent(this, DownloadsActivity::class.java)) }
+        // v2.1.7 (E): the banner follows the download StateFlow (progress is published every ~300 ms,
+        // renderDownloadBanner() ignores identical updates).
+        lifecycleScope.launch { core.downloads.downloads.collect { renderDownloadBanner(it) } }
+        // v2.1.7 (N): while the active session is Incognito, Android keeps one low-priority
+        // notification that explains it and can close the session (deleting its profile data).
+        lifecycleScope.launch { core.sessions.active.collect { IncognitoNotifier.update(this@BrowserActivity, it) } }
+        // v2.1.7 (H): pull-to-refresh. The gesture only arms on a page scrolled to its very top and
+        // never in fullscreen; refreshing reloads the tab that is on screen (same as the menu Reload).
+        webContainer.onRefresh = { currentTab?.let { reload(it) } }
+        webContainer.canRefresh = {
+            val t = currentTab
+            !anyFullScreen && t != null && !t.isStartPage && t.scrollY <= 0 && !webContainer.isRefreshing
+        }
         errorPage = findViewById(R.id.errorPage)
         backButton = findViewById(R.id.backButton)
         forwardButton = findViewById(R.id.forwardButton)
@@ -311,7 +341,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         menuDrawerView = findViewById(R.id.menuDrawer)
         sessionsDrawer = SessionsDrawer(this, core, sessionsDrawerView)
         appMenu = AppMenu(menuDrawerView, core)
-        hud = HudController(findViewById<LinearLayout>(R.id.hud), findViewById(R.id.hudNub), this)
+        fullscreenExit = FullscreenExitButton(findViewById(R.id.fullscreenExitButton)) { exitFullscreen() }
         // Drawers are opened only through their buttons (a swipe from the edge would fight with page gestures).
         drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
         drawerLayout.addDrawerListener(object : DrawerLayout.SimpleDrawerListener() {
@@ -359,6 +389,15 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         }
         backButton.setOnClickListener { goBack() }
         forwardButton.setOnClickListener { goForward() }
+        homeButton = findViewById(R.id.homeButton)
+        homeButton.setOnClickListener {
+            // Home never creates a tab and never steals the page: it navigates the tab that is on
+            // screen (Back restores where you were), honouring the configured homepage / start page.
+            val tab = currentTab ?: return@setOnClickListener
+            if (tab.url == homeUrl()) return@setOnClickListener   // already there: nothing to do
+            exitSearchMode()
+            loadInTab(tab, homeUrl())
+        }
         findViewById<View>(R.id.newTabButton).setOnClickListener { newTab() }
         findViewById<View>(R.id.tabsButton).setOnClickListener { exitSearchMode(); TabsSheet().show(supportFragmentManager, "tabs") }
 
@@ -406,7 +445,12 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
                 gv.releaseSession()
                 gv.setSession(gs)
             }
-            gs.selectionActionDelegate = BasicSelectionActionDelegate(this)
+            // v2.1.7 (D): Gecko's selection toolbar + Share / Search the web (app-appended actions).
+            gs.selectionActionDelegate = AppSelectionActionDelegate(
+                this,
+                onShare = { text -> shareText(text, getString(R.string.share)) },
+                onSearch = { text -> navigate(text) },
+            )
         } catch (t: Throwable) {
             AppLog.e(TAG, "attachSession failed for ${tab.id.take(8)}", t)
         }
@@ -456,6 +500,9 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         if (urlInput.hasFocus()) {
             hideKeyboard()
             focusHolder.requestFocus()
+            // v2.1.7 (F): requestFocus() can be ignored while the IME window still holds focus; without
+            // this fallback the bar stayed focused and updateToolbar() kept the typed text forever.
+            if (urlInput.hasFocus()) urlInput.clearFocus()
         }
         currentTab?.let { updateToolbar(it) }
     }
@@ -490,6 +537,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
                 onFullScreenChanged(previous, false)
             }
         }
+        if (previous == null || previous.id != tab.id) webContainer.setRefreshing(false)   // v2.1.7 (H)
         currentTabId = tab.id
         core.tabs.selectTab(tab)
         exitSearchMode()
@@ -504,6 +552,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
             } catch (t: Throwable) {
                 AppLog.e(TAG, "ensureSession failed", t)
                 tab.error = PageError(TabManager.ERROR_RENDERER_GONE, 0, t.message ?: "", tab.url)
+                tab.isLoading = false      // v2.1.7: a failed open must not leave the optimistic bar stuck
+                tab.progress = 100
                 null
             }
             startPage?.view?.let { if (it.parent === webContainer) webContainer.removeView(it) }
@@ -552,14 +602,43 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         if (tab.isStartPage) focusUrlBar()
     }
 
-    fun closeTab(tab: Tab) {
+    /**
+     * @param undo offer "Tab closed / Undo" afterwards (v2.1.7). Only set for closes the user asked
+     *             for on purpose (card X, card menu, swipe); page-driven/internal closes stay silent.
+     */
+    fun closeTab(tab: Tab, undo: Boolean = false) {
+        val closedId = tab.id
+        val sid = tab.sessionId
         val wasCurrent = tab.id == currentTabId
-        val next = core.tabs.closeTab(tab.id)
+        val next = core.tabs.closeTab(closedId)
         if (wasCurrent) {
             currentTabId = null
-            showTab(next ?: core.tabs.createTab(tab.sessionId, homeUrl(), select = true))
+            showTab(next ?: core.tabs.createTab(sid, homeUrl(), select = true))
         }
         updateTabCount()
+        if (undo) offerUndo(listOf(tab))
+    }
+
+    /**
+     * v2.1.7 (issue I): "Tab closed" / "N tabs closed" with an Undo action. Restoring goes through the
+     * already existing recently-closed stack (TabManager.reopenClosedTab), so URL, title, group, pinned
+     * state and the Gecko session state all come back. Start pages are never remembered there, so they
+     * are never offered an Undo (which could otherwise restore an unrelated, older entry).
+     */
+    fun offerUndo(closed: List<Tab>) {
+        val restorable = closed.filter { !it.isStartPage }.sortedBy { it.position }
+        if (restorable.isEmpty()) return
+        val sid = restorable.first().sessionId
+        val ids = restorable.map { it.id }
+        val message = if (ids.size == 1) getString(R.string.tab_closed)
+                      else getString(R.string.tabs_closed_count_fmt, ids.size)
+        Snackbar.make(root, message, Snackbar.LENGTH_LONG)
+            .setAction(getString(R.string.undo)) {
+                ids.forEach { id -> core.tabs.reopenClosedTab(sid, id, select = false) }
+                if (sid == core.sessions.activeId) ids.lastOrNull()?.let { id -> core.tabs.get(id)?.let { showTab(it) } }
+                updateTabCount()
+            }
+            .show()
     }
 
     /** Several tabs were closed by TabManager (group actions): make sure something is displayed. */
@@ -588,8 +667,13 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
 
     /** javascript: URL / bookmarklet typed or pasted into the address bar: executed in the current page, never searched. */
     private fun runJavaScript(tab: Tab, source: String) {
-        if (tab.isStartPage || tab.geckoSession?.isOpen != true) { snack(getString(R.string.js_no_page)); updateToolbar(tab); return }
+        // v2.1.7 (F): whatever happens, the bar goes back to the page URL - never keeps the script/typed text.
+        val pageUrl = if (tab.isStartPage) "" else tab.url
+        if (tab.isStartPage || tab.geckoSession?.isOpen != true) {
+            snack(getString(R.string.js_no_page)); forceToolbarUrl = pageUrl; updateToolbar(tab); return
+        }
         if (core.tabs.runScript(tab, source)) snack(getString(R.string.js_executed))
+        forceToolbarUrl = pageUrl
         updateToolbar(tab)   // the address bar shows the page URL again, not the script
     }
 
@@ -602,6 +686,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
             tab.title = ""
             tab.canGoBack = false
             tab.canGoForward = false
+            tab.isLoading = false
+            tab.progress = 100
             core.tabs.persistTab(tab)
         } else {
             // A hibernated tab gets its saved history restored first (loadContent = true, no-op for a live session),
@@ -610,9 +696,16 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
             tab.savedState = null
             tab.url = url
             tab.title = ""
+            // v2.1.7 (G): optimistic loading state - the stop button and the indeterminate progress bar
+            // appear on this very frame instead of waiting for Gecko's onPageStart.
+            tab.isLoading = true
+            tab.progress = 0
             gs.load(GeckoSession.Loader().uri(url))
         }
-        if (tab.id == currentTabId) showTab(tab) else core.tabs.persistTab(tab)
+        if (tab.id == currentTabId) {
+            forceToolbarUrl = if (UrlUtils.isStartPage(url)) "" else url   // v2.1.7 (F)
+            showTab(tab)
+        } else core.tabs.persistTab(tab)
     }
 
     override fun openUrl(url: String, newTab: Boolean) {
@@ -636,10 +729,15 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         if (tab.isStartPage) { showTab(tab); return }
         val gs = tab.geckoSession
         if (gs == null || !gs.isOpen) {
+            tab.isLoading = true; tab.progress = 0     // v2.1.7 (G): reacts before Gecko answers
             showTab(tab)   // re-opens the session and restores state / loads the URL
         } else {
+            // v2.1.7 (G): optimistic state - the stop button + indeterminate bar appear on this frame.
+            tab.isLoading = true
+            tab.progress = 0
             gs.reload()
             updateErrorPage(tab)
+            core.tabs.notifyTabUpdated(tab)
         }
     }
 
@@ -658,8 +756,9 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         val tab = currentTab
         when {
             drawerLayout.isDrawerOpen(sessionsDrawerView) || drawerLayout.isDrawerOpen(menuDrawerView) -> drawerLayout.closeDrawers()
-            // Both fullscreen flavours leave through the same synchronous path (see exitFullscreen).
-            anyFullScreen -> exitFullscreen()
+            // Fullscreen is left ONLY through the floating control (never through Back - Back must
+            // keep its normal meaning inside fullscreen: close the drawers, close the URL focus, go
+            // back in the page, close an opened tab, then background the app with fullscreen intact).
             urlInput.hasFocus() -> exitSearchMode()
             tab?.geckoSession != null && tab.canGoBack -> goBack()
             tab?.openerTabId != null -> closeTab(tab)
@@ -681,7 +780,14 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     }
 
     private fun updateToolbar(tab: Tab) {
-        if (!urlInput.hasFocus()) {
+        val forced = forceToolbarUrl
+        if (forced != null) {
+            // v2.1.7 (F): the navigation decides the text exactly once, even while the bar still has focus.
+            forceToolbarUrl = null
+            if (urlInput.text?.toString() != forced) urlInput.setText(forced)
+            // The write is programmatic: it must never look like typing (no suggestion popup).
+            if (::suggestionPopup.isInitialized) suggestionPopup.dismiss()
+        } else if (!urlInput.hasFocus()) {
             // Runs on every progress tick: only touch the EditText (layout + text watcher) when the text changed.
             val text = if (tab.isStartPage) "" else tab.url
             if (urlInput.text?.toString() != text) urlInput.setText(text)
@@ -696,6 +802,11 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         )
         reloadStopButton.setImageResource(if (tab.isLoading) R.drawable.ic_close else R.drawable.ic_refresh)
         reloadStopButton.contentDescription = getString(if (tab.isLoading) R.string.stop else R.string.reload)
+        // v2.1.7 (G): while Gecko has not reported the first byte yet (or the navigation was issued by
+        // this app and onPageStart has not fired) the bar runs in indeterminate mode instead of
+        // staying invisible/at 0 for seconds.
+        val indeterminate = tab.isLoading && tab.progress <= 0
+        if (progressBar.isIndeterminate != indeterminate) progressBar.isIndeterminate = indeterminate
         progressBar.progress = tab.progress
         val live = tab.geckoSession != null
         backButton.isEnabled = live && tab.canGoBack
@@ -714,6 +825,26 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
 
     private fun updateIsolationBanner() {
         isolationBanner.isVisible = !core.isolation.isIsolated && !inFullScreen && !toolbarHidden
+    }
+
+    /** v2.1.7 (issue E): live "Downloading x - 42% (+1 more)" banner; gone as soon as nothing runs. */
+    private fun renderDownloadBanner(list: List<DownloadEntity>) {
+        val active = list.filter { DownloadStatus.isActive(it.status) }
+        if (active.isEmpty()) {
+            if (downloadBanner.isVisible) downloadBanner.isVisible = false
+            return
+        }
+        val primary = active.maxByOrNull { it.updatedAt } ?: return
+        val percent = if (primary.totalBytes > 0) {
+            ((primary.downloadedBytes * 100) / primary.totalBytes).toInt().coerceIn(0, 100)
+        } else -1
+        val text = buildString {
+            append(getString(R.string.dl_banner, primary.fileName))
+            if (percent >= 0) append(" \u00b7 ").append(percent).append('%')
+            if (active.size > 1) append(" \u00b7 ").append(getString(R.string.dl_banner_more, active.size - 1))
+        }
+        if (downloadBanner.text != text) downloadBanner.text = text
+        if (!downloadBanner.isVisible) downloadBanner.isVisible = true
     }
 
     private fun showIsolationInfo() {
@@ -773,6 +904,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         if (tab.id != currentTabId) return
         updateToolbar(tab)
         updateErrorPage(tab)
+        // v2.1.7 (H): the pull spinner lives exactly as long as the load it started.
+        if (!tab.isLoading) webContainer.setRefreshing(false)
         // A start-page tab that gained a session (e.g. popup target) must show it.
         if (tab.geckoSession != null && !isDisplayed(tab) && !tab.awaitingDisplay && startPage?.view?.parent != null) showTab(tab)
     }
@@ -781,7 +914,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         if (sessionId == core.sessions.activeId) updateTabCount()
     }
 
-    // ================================================================== app menu (right drawer) + HUD
+    // ================================================================== app menu (right drawer)
 
     private fun renderMenu() {
         val tab = currentTab
@@ -799,12 +932,29 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
             SessionEditDialog.show(this, null) { name, color, isPrivate -> lifecycleScope.launch { core.sessions.create(name, color, isPrivate); currentTabId = null; showActiveSessionTab() } }
         }
         entry(R.drawable.ic_star, R.string.add_remove_bookmark, enabled = hasPage) { tab?.let { toggleBookmark(it) } }
-        entry(R.drawable.ic_share, R.string.share, enabled = hasPage) { tab?.let { shareUrl(it.url, it.title) } }
+        entry(R.drawable.ic_share, R.string.share_page, enabled = hasPage) { tab?.let { shareUrl(it.url, it.title) } }
+        entry(R.drawable.ic_apk, R.string.share_app) {
+            shareText("${getString(R.string.app_name)}\n$SHARE_APP_URL", getString(R.string.share_app), getString(R.string.app_name))
+        }
         entry(R.drawable.ic_open_in_new, R.string.open_external, enabled = hasPage) { tab?.let { openExternal(it.url) } }
-        entry(R.drawable.ic_search, R.string.find_in_page, enabled = hasPage) { hudFind() }
+        // v2.1.7 (D): transport control while the page exposes a media session (audio/video).
+        val playing = tab?.isPlayingMedia == true
+        val activeMedia = tab?.mediaSession?.takeIf { it.isActive }
+        if (activeMedia != null && tab != null && hasPage) {
+            val media = activeMedia
+            entry(
+                if (playing) R.drawable.ic_pause else R.drawable.ic_play,
+                if (playing) R.string.media_pause else R.string.media_play,
+            ) {
+                if (playing) media.pause() else media.play()
+            }
+        }
+        entry(R.drawable.ic_search, R.string.find_in_page, enabled = hasPage) { findInPage() }
+        entry(R.drawable.ic_align_top, R.string.scroll_top, enabled = hasPage) { scrollPage(top = true) }
+        entry(R.drawable.ic_align_bottom, R.string.scroll_bottom, enabled = hasPage) { scrollPage(top = false) }
         entry(R.drawable.ic_desktop, R.string.desktop_site, enabled = hasPage, checked = tab?.desktopMode == true) { tab?.let { toggleDesktop(it) } }
         entry(R.drawable.ic_lock, R.string.site_permissions, enabled = hasPage) { tab?.let { openSitePermissions(it) } }
-        entry(R.drawable.ic_fullscreen, if (toolbarHidden) R.string.toolbar_show else R.string.hud_item_fullscreen) { setToolbarHidden(!toolbarHidden) }
+        entry(R.drawable.ic_fullscreen, if (toolbarHidden) R.string.toolbar_show else R.string.hide_toolbar) { setToolbarHidden(!toolbarHidden) }
         entry(R.drawable.ic_star, R.string.bookmarks) { openUrlLauncher.launch(Intent(this, BookmarksActivity::class.java)) }
         entry(R.drawable.ic_history, R.string.history) { openUrlLauncher.launch(Intent(this, HistoryActivity::class.java)) }
         val active = core.downloads.activeCount
@@ -823,19 +973,20 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         appMenu.render(title, subtitle, entries, core.extensions.actions.value.values) { a -> closeDrawers(); try { a.action.click() } catch (t: Throwable) { AppLog.w(TAG, "action click failed", t) } }
     }
 
-    /** HUD "fullscreen": hide the whole toolbar so the page gets the full screen; HUD stays usable. */
+    /** "Hide toolbar" (app-owned fullscreen): the page gets the whole screen; the floating
+     *  fullscreen-exit control is the only way out (Back keeps its normal meaning). */
     private fun setToolbarHidden(hidden: Boolean) {
         toolbarHidden = hidden
         applyChrome()
         if (hidden) snack(getString(R.string.toolbar_hidden_hint))
     }
 
-    /** True while any chrome-hiding mode is active: the HUD's toolbar-hidden mode or HTML5 fullscreen. */
+    /** True while any chrome-hiding mode is active: hidden-toolbar mode or HTML5 fullscreen. */
     private val anyFullScreen: Boolean get() = toolbarHidden || inFullScreen
 
     /**
-     * The ONLY place that decides chrome visibility. The toolbar, isolation banner, progress bar,
-     * HUD pill and floating close button all derive from [toolbarHidden] + [inFullScreen] + the
+     * The ONLY place that decides chrome visibility. The toolbar, isolation banner, progress bar
+     * and floating fullscreen-exit control all derive from [toolbarHidden] + [inFullScreen] + the
      * current tab, so entering/leaving fullscreen or switching tabs can never leave a surface stale
      * (v2.1.6: each surface used to be set from a different code path with slightly different
      * conditions, which is how the toolbar could stay hidden after leaving fullscreen).
@@ -846,8 +997,10 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         val tab = currentTab
         topBar.isVisible = !hidden
         updateIsolationBanner()
-        progressBar.isVisible = !hidden && tab != null && tab.isLoading && tab.progress < 100
-        hud.onChromeChanged(hidden)
+        // Runs on every progress tick: only touch the views when the derived value actually changed.
+        val progressVisible = !hidden && tab != null && tab.isLoading && tab.progress < 100
+        if (progressBar.isVisible != progressVisible) progressBar.isVisible = progressVisible
+        fullscreenExit.setVisible(hidden)
         applySystemBars(inFullScreen)
     }
 
@@ -864,7 +1017,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         applyChrome()
     }
 
-    /** System bars follow HTML5 fullscreen only (the HUD's toolbar-hidden mode keeps them - existing
+    /** System bars follow HTML5 fullscreen only (hidden-toolbar mode keeps them - existing
      *  behavior). The state cache keeps [applyChrome] free of window churn on the progress-tick path. */
     private fun applySystemBars(hide: Boolean) {
         if (hide == systemBarsHidden) return
@@ -884,18 +1037,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         core.tabs.runScript(t, js)
     }
 
-    override fun hudBack() = goBack()
-    override fun hudForward() = goForward()
-    override fun hudReload() { currentTab?.let { reload(it) } }
-    override fun hudScrollTop() { pageScript(currentTab, "window.scrollTo({top:0,behavior:'smooth'})") }
-    override fun hudScrollBottom() { pageScript(currentTab, "window.scrollTo({top:document.documentElement.scrollHeight,behavior:'smooth'})") }
-    override fun hudDesktop() { currentTab?.let { toggleDesktop(it) } }
-    override fun hudToggleToolbar() { setToolbarHidden(!toolbarHidden) }
-    /** Floating close button: leave every fullscreen flavour at once (toolbar-hidden AND HTML5). */
-    override fun hudExitFullscreen() = exitFullscreen()
-    override fun hudNewTab() = newTab()
-    override fun hudCloseTab() { currentTab?.let { closeTab(it) } }
-    override fun hudFind() {
+    /** App-menu "Find in page" (the bottom HUD that used to own this action was removed in v2.1.7). */
+    private fun findInPage() {
         val tab = currentTab ?: return
         val gs = tab.geckoSession?.takeIf { it.isOpen } ?: return
         val input = EditText(this).apply { hint = getString(R.string.find_hint); setSingleLine() }
@@ -905,6 +1048,15 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
             }
             .setNegativeButton(android.R.string.cancel) { _, _ -> try { gs.finder.clear() } catch (_: Throwable) {} }
             .show()
+    }
+
+    /** Smooth scroll to the top / bottom of the page (app-menu entries that replace the removed HUD pill). */
+    private fun scrollPage(top: Boolean) {
+        pageScript(
+            currentTab,
+            if (top) "window.scrollTo({top:0,behavior:'smooth'})"
+            else "window.scrollTo({top:document.documentElement.scrollHeight,behavior:'smooth'})"
+        )
     }
 
     /** Desktop mode toggle: applied to the tab now AND remembered per site + session (Desktop site rule). */
@@ -919,13 +1071,24 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         snack(getString(if (tab.desktopMode) R.string.desktop_on else R.string.desktop_off))
     }
 
-    private fun shareUrl(url: String, title: String) {
+    /** Shares the current page (page title + URL). The chooser is labelled so it can never be
+     *  mistaken for "Share app" (v2.1.7 split the two menu entries). */
+    private fun shareUrl(url: String, title: String) =
+        shareText(if (title.isBlank()) url else "$title\n$url", getString(R.string.share_page), title)
+
+    /** Shares plain text through the system chooser; the caller names the chooser. */
+    private fun shareText(text: String, chooserTitle: String, subject: String? = null) {
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, title)
-            putExtra(Intent.EXTRA_TEXT, if (title.isBlank()) url else "$title\n$url")
+            if (subject != null) putExtra(Intent.EXTRA_SUBJECT, subject)
+            putExtra(Intent.EXTRA_TEXT, text)
         }
-        startActivity(Intent.createChooser(send, getString(R.string.share)))
+        try {
+            startActivity(Intent.createChooser(send, chooserTitle))
+        } catch (t: ActivityNotFoundException) {
+            AppLog.w(TAG, "no share target", t)
+            snack(getString(R.string.share_none))
+        }
     }
 
     private fun openExternal(url: String): Boolean = try {
@@ -1411,8 +1574,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
             ensureStoragePermission { ok ->
                 if (!ok) { core.downloads.discard(req); snack(getString(R.string.perm_storage_denied)); return@ensureStoragePermission }
                 core.downloads.start(req, tab.sessionId, sourcePage)
-                Snackbar.make(root, getString(R.string.dl_started, req.fileName), Snackbar.LENGTH_LONG)
-                    .setAction(R.string.downloads) { openUrlLauncher.launch(Intent(this, DownloadsActivity::class.java)) }.show()
+                // v2.1.7 (issue E): no transient snackbar here any more - the top banner (and the Android
+                // notification from DownloadNotifier) report progress until the download finishes.
             }
         }
         if (Prefs.askBeforeDownload) {
@@ -1450,6 +1613,15 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
 
     // ---- link / image context menu -----------------------------------------------------------------
 
+    /**
+     * Link / image / media context menu (v2.1.7, issue D).
+     *
+     * Every entry Firefox/Chrome Android expose is here: open in a NEW (foreground) tab vs in a
+     * background tab, copy, share and download of the linked resource, plus the image and media groups
+     * with their own addresses. Text selection actions deliberately live in the selection toolbar
+     * (AppSelectionActionDelegate): GeckoView 155's ContextElement carries no text, so a long press on
+     * plain text starts a selection instead of this dialog - that is engine behaviour, not a gap.
+     */
     override fun onContextMenu(tab: Tab, element: GeckoSession.ContentDelegate.ContextElement) {
         val link = element.linkUri
         val src = element.srcUri
@@ -1457,19 +1629,43 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         val isMedia = element.type == GeckoSession.ContentDelegate.ContextElement.TYPE_VIDEO || element.type == GeckoSession.ContentDelegate.ContextElement.TYPE_AUDIO
         val target = link ?: src ?: return
         val items = mutableListOf<Pair<String, () -> Unit>>()
-        if (link != null) {
-            items += getString(R.string.open_in_new_tab) to { core.tabs.createTab(tab.sessionId, link, select = false, openerTabId = tab.id); updateTabCount(); snack(getString(R.string.tab_opened_background)) }
-            items += getString(R.string.copy_link) to { copyToClipboard(link) }
-            items += getString(R.string.share_link) to { shareUrl(link, element.title ?: "") }
+        val title = element.title?.takeIf { it.isNotBlank() } ?: element.linkText?.takeIf { it.isNotBlank() } ?: ""
+
+        fun openBackground(url: String) {
+            core.tabs.createTab(tab.sessionId, url, select = false, openerTabId = tab.id)
+            updateTabCount()
+            snack(getString(R.string.tab_opened_background))
         }
-        if (src != null && (isImage || isMedia)) {
-            items += getString(R.string.open_image_new_tab) to { core.tabs.createTab(tab.sessionId, src, select = false, openerTabId = tab.id); updateTabCount() }
+        fun openForeground(url: String) {
+            val t = core.tabs.createTab(tab.sessionId, url, select = true, openerTabId = tab.id)
+            updateTabCount()
+            showTab(t)
+        }
+
+        if (link != null) {
+            items += getString(R.string.open_in_new_tab) to { openForeground(link) }
+            items += getString(R.string.open_in_background_tab) to { openBackground(link) }
+            items += getString(R.string.open_in_this_tab) to { if (tab.id == currentTabId) navigate(link) else openForeground(link) }
+            items += getString(R.string.copy_link) to { copyToClipboard(link) }
+            items += getString(R.string.share_link) to { shareUrl(link, title) }
+            items += getString(R.string.download_linked_file) to { downloadUrl(link) }
+        }
+        if (src != null && isImage) {
+            items += getString(R.string.open_image_new_tab) to { openForeground(src) }
+            items += getString(R.string.open_image_this_tab) to { if (tab.id == currentTabId) navigate(src) else openForeground(src) }
+            items += getString(R.string.copy_image_address) to { copyToClipboard(src) }
+            items += getString(R.string.share_image) to { shareUrl(src, title) }
             items += getString(R.string.download_image) to { downloadUrl(src) }
-            if (link == null) items += getString(R.string.copy_link) to { copyToClipboard(src) }
+        }
+        if (src != null && isMedia) {
+            items += getString(R.string.open_media_new_tab) to { openForeground(src) }
+            items += getString(R.string.copy_media_address) to { copyToClipboard(src) }
+            items += getString(R.string.share_media_address) to { shareUrl(src, title) }
+            items += getString(R.string.save_media) to { downloadUrl(src) }
         }
         items += getString(R.string.open_external) to { openExternal(target) }
         MaterialAlertDialogBuilder(this)
-            .setTitle(element.title?.takeIf { it.isNotBlank() } ?: UrlUtils.displayHost(target).ifBlank { target })
+            .setTitle(title.ifBlank { UrlUtils.displayHost(target).ifBlank { target } })
             .setItems(items.map { it.first }.toTypedArray()) { _, i -> items[i].second() }
             .show()
     }
@@ -1511,9 +1707,28 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         Snackbar.make(root, text, Snackbar.LENGTH_SHORT).show()
     }
 
+    /**
+     * Snackbar with an Undo action (v2.1.7, issue I). Reversible bulk actions get this instead of a
+     * confirmation dialog - archiving is one keystroke away from being undone, so asking first would
+     * only add a step. Destructive-and-final actions keep their dialog (TabsSheet.closeSelected,
+     * group delete, session delete, clear site data).
+     */
+    fun snackUndo(text: String, onUndo: () -> Unit) {
+        Snackbar.make(root, text, Snackbar.LENGTH_LONG)
+            .setAction(getString(R.string.undo)) { onUndo() }
+            .show()
+    }
+
     companion object {
         private const val TAG = "BrowserActivity"
         private const val EXTRA_HANDLED = "app.multisession.browser.HANDLED"
         private const val THUMBNAIL_WIDTH_PX = 360f
+
+        /**
+         * Public download page shared by the "Share app" menu entry. Deliberately the public mirror
+         * only - the `origin` remote URL embeds a credential and must never reach any UI, string or
+         * share payload.
+         */
+        private const val SHARE_APP_URL = "https://github.com/Qmgamerzyt/MultiSessionBrowser-Release/releases"
     }
 }

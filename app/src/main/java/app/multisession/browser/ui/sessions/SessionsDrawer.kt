@@ -63,9 +63,9 @@ class SessionsDrawer(private val activity: BrowserActivity, private val core: Br
         }
         root.findViewById<View>(R.id.newPrivateButton).setOnClickListener {
             MaterialAlertDialogBuilder(activity)
-                .setTitle(R.string.private_session)
-                .setMessage(R.string.private_session_explainer)
-                .setPositiveButton(R.string.create) { _, _ -> create(activity.getString(R.string.private_session_name), SessionManager.PALETTE[4], true) }
+                .setTitle(R.string.incognito_session)
+                .setMessage(R.string.incognito_session_explainer)
+                .setPositiveButton(R.string.create) { _, _ -> create(activity.getString(R.string.incognito_session_name), SessionManager.PALETTE[4], true) }
                 .setNegativeButton(android.R.string.cancel, null)
                 .show()
         }
@@ -121,7 +121,9 @@ class SessionsDrawer(private val activity: BrowserActivity, private val core: Br
 
     private fun confirmDelete(session: SessionEntity) {
         MaterialAlertDialogBuilder(activity)
-            .setTitle(R.string.delete_session_title)
+            // getString() formats the %1$s; setTitle(R.string.x) never does, which is how the title
+            // used to show the literal "Delete “%1$s”?" (v2.1.7 fix).
+            .setTitle(activity.getString(R.string.delete_session_title, session.name))
             .setMessage(activity.getString(R.string.delete_session_confirm, session.name))
             .setPositiveButton(R.string.delete) { _, _ ->
                 activity.lifecycleScope.launch {
@@ -161,7 +163,7 @@ class SessionsDrawer(private val activity: BrowserActivity, private val core: Br
                 val tabs = core.tabs.countFor(s.id)
                 val parts = mutableListOf(activity.resources.getString(if (tabs == 1) R.string.tab_count_fmt else R.string.tabs_count_fmt, tabs))
                 if (s.isDefault) parts += activity.getString(R.string.default_label)
-                if (s.isPrivate) parts += activity.getString(R.string.private_label)
+                if (s.isPrivate) parts += activity.getString(R.string.incognito_label)
                 subtitle.text = parts.joinToString(" · ")
                 check.isVisible = active
                 drag.isVisible = !s.isDefault
