@@ -46,7 +46,10 @@ With `activeTab === null`:
 * `ExtensionManager.setTabActive(gs, active)` — one call site, wrapped in **its own dedicated
   try/catch that logs** (the only such catch approved for this release): a failure while marking a
   background tab inactive must never abort a tab switch. It logs, never swallows, and is
-  never used to hide a crash elsewhere.
+  never used to hide a crash elsewhere. It goes through the **runtime-wide**
+  `GeckoRuntime.getWebExtensionController()`; `GeckoSession.getWebExtensionController()` returns
+  `WebExtension.SessionController`, which has no `setTabActive` at all — the first CI run caught
+  exactly that unresolved reference.
 * `TabManager.setDisplayed()` now mirrors `gs.setActive(isIt)` with `setTabActive(gs, isIt)` for
   every live session. Order inside the loop is irrelevant — `setTabActive(_, false)` only sets
   `nativeTab.active` and never clears `_topWindow`.
@@ -204,7 +207,9 @@ together with its call sites in 2.1.9.
   literals, raw strings and `${…}` templates).
 * Token scan — `git grep` for `ghp_…` / GitHub token patterns: **clean**.
 * **CI is the only compile gate** (no local Android SDK). The 2.1.8 commit must be green before the
-  tag.
+  tag. First run failed with the single unresolved reference `setTabActive` on
+  `WebExtension.SessionController` (see W‑1); fixed by routing through the runtime-wide
+  `WebExtensionController` and re-run.
 
 ## On-device checklist (W‑0) — *pending, must be confirmed before calling the behaviour fixed*
 

@@ -267,7 +267,10 @@ class ExtensionManager(private val core: BrowserCore) {
      */
     fun setTabActive(gs: GeckoSession, active: Boolean) {
         try {
-            gs.webExtensionController.setTabActive(gs, active)
+            // Runtime-wide controller: `GeckoSession.getWebExtensionController()` is
+            // WebExtension.SessionController, which only carries the per-session delegate setters
+            // and has no setTabActive at all.
+            controller.setTabActive(gs, active)
             if (EXTDBG) AppLog.d(EXTDBG_TAG, "setTabActive active=$active open=${gs.isOpen}")
         } catch (t: Throwable) {
             AppLog.w(TAG, "setTabActive failed active=$active", t)
