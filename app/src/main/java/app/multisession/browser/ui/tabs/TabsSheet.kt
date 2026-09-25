@@ -428,9 +428,13 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
     private fun offerArchiveUndo(archived: List<Tab>) {
         if (archived.isEmpty()) return
         val ids = archived.map { it.id }
-        browser?.snackUndo(getString(R.string.tabs_archived_fmt, archived.size)) {
+        // Both messages are resolved NOW, while the fragment is still attached: the Undo action runs
+        // later, when the sheet may already be dismissed (Fragment.getString() needs a context).
+        val message = getString(R.string.tabs_archived_fmt, archived.size)
+        val restored = getString(R.string.tabs_unarchived_fmt, ids.size)
+        browser?.snackUndo(message) {
             core.tabs.unarchiveTabs(ids)
-            snack(getString(R.string.tabs_unarchived_fmt, ids.size))
+            browser?.snack(restored)
         }
     }
 

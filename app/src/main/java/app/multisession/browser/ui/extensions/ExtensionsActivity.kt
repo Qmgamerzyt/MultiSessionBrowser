@@ -261,13 +261,18 @@ class ExtensionsActivity : AppCompatActivity(), ExtensionHost {
      */
     private fun showDetails(ext: WebExtension) {
         val m = ext.metaData
+        // MetaData members come from another module, so they are copied to locals first: a public
+        // API property from a different module can never be smart cast, only a local val can.
+        val desc = m.description
+        val author = m.creatorName
+        val perms = m.requiredPermissions
         val msg = buildString {
-            if (!m.description.isNullOrBlank()) { append(m.description.trim()); append("\n\n") }
+            if (!desc.isNullOrBlank()) { append(desc.trim()); append("\n\n") }
             append(getString(R.string.ext_amo_version, m.version ?: "?"))
-            if (!m.creatorName.isNullOrBlank()) append(" \u00b7 ").append(m.creatorName)
-            if (!m.requiredPermissions.isNullOrEmpty()) {
+            if (!author.isNullOrBlank()) append(" \u00b7 ").append(author)
+            if (!perms.isNullOrEmpty()) {
                 append("\n\n")
-                append(getString(R.string.ext_amo_permissions, m.requiredPermissions.joinToString("\n") { "\u2022 $it" }))
+                append(getString(R.string.ext_amo_permissions, perms.joinToString("\n") { "\u2022 $it" }))
             }
             append("\n\n").append(getString(R.string.ext_details_id, ext.id))
         }

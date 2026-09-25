@@ -59,7 +59,7 @@ class PullRefreshFrameLayout @JvmOverloads constructor(
         val size = (32 * density).toInt()
         addView(
             indicator,
-            LayoutParams(size, size, Gravity.TOP or Gravity.HORIZONTAL_GRAVITY_CENTER).apply {
+            LayoutParams(size, size, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
                 topMargin = (14 * density).toInt()
             },
         )
