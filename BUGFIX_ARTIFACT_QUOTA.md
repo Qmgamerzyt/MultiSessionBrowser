@@ -107,7 +107,7 @@ update that snapshot. Two consequences:
   counting until the next recalculation cycle.
 
 ### What was already ruled out
-- ❌ Not a token problem — new token `ghp_dsy...J0EjXTz` behaves identically.
+- ❌ Not a token problem — a freshly created token behaves identically.
 - ❌ Not a repo-local artifact problem — repo verified empty.
 - ❌ Not leftover artifacts — 0 across all 21 repos.
 - ❌ Not packages — 0 in every package type.
