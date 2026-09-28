@@ -99,7 +99,7 @@ object PageScale {
      * date when they become displayed (TabManager.setDisplayed).
      */
     fun applyDisplayed(core: BrowserCore) {
-        val tab = core.tabs.displayedTab ?: return
+        val tab = core.tabs.displayedTabOrNull() ?: return
         applyFor(core, tab)
     }
 

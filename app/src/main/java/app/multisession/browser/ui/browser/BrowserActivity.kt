@@ -1336,7 +1336,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         // the selected workspace, and it can be null or out of step with the rendered tab while a
         // session switch is in flight — `tabs.create` from an add-on's background page would then
         // silently open nothing. Fall back to the active session for the start page.
-        val sid = core.tabs.displayedTab?.sessionId ?: core.sessions.activeId ?: return null
+        val sid = core.tabs.displayedTabOrNull()?.sessionId ?: core.sessions.activeId ?: return null
         val tab = core.tabs.createExtensionTab(sid, url) ?: return null   // shown as soon as Gecko starts loading it (onPageStart)
         updateTabCount()
         return tab

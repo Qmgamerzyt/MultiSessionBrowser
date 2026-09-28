@@ -114,6 +114,10 @@ class TabManager(private val core: BrowserCore) {
     /** The GeckoSession behind the GeckoView right now, null while the start page is on screen. */
     fun displayedSession(): GeckoSession? = displayedTab?.geckoSession
 
+    /** The tab behind the GeckoView right now, null while the start page is on screen. Exposed as a
+     *  read-only view on purpose: [displayedTab] is only ever written by [setDisplayed]. */
+    fun displayedTabOrNull(): Tab? = displayedTab
+
     fun liveCount(): Int = tabs.values.count { it.geckoSession != null }
 
     fun pinnedTabs(sessionId: String): List<Tab> = tabsFor(sessionId).filter { it.pinned }
