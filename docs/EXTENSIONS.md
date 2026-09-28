@@ -4,7 +4,8 @@ Implemented in v2.0.2 (`extensions/ExtensionManager.kt`, `ui/extensions/Extensio
 AMO catalog, page `.xpi` interception and the install-prompt host handoff added in v2.1.6 (`extensions/AmoApi.kt`);
 "Add extension" by address/slug, add-on details, manual update check and the Firefox Add-ons link added in v2.1.7;
 active-tab wiring, per-session delegates and tab-specific actions, popup lifecycle, the "Extension actions" sheet and
-`downloads.download()` added in v2.1.8.
+`downloads.download()` added in v2.1.8; prompt single-resolution, permission-grant visibility and the extension tab
+targeting fix added in v2.1.9.
 
 ## Works (real GeckoView `WebExtensionController` wiring)
 | Capability | How |
@@ -16,6 +17,8 @@ active-tab wiring, per-session delegates and tab-specific actions, popup lifecyc
 | **Which screen owns the prompt** | The foreground Activity is the `ExtensionHost`: `BrowserActivity` and `ExtensionsActivity` both claim it in `onStart()` and clear it in `onStop()` only if they still hold it (`em.host === this`). v2.1.6 root-cause fix: previously only `BrowserActivity` ever claimed it, so with the Extensions screen in front `host` was `null` and **every install started there was auto-denied** before the user could approve it. |
 | Install failures | `AddonManagerDelegate.onInstallationFailed` logs the structured `InstallException.code` and refreshes the list; the user-facing message comes from `installErrorMessage()` (localized, shared by every install surface). One failure => one notification. |
 | Optional / update permission prompts | `onOptionalPrompt`, `onUpdatePrompt` → Allow/Block dialog. |
+| **Which permissions Gecko actually granted** (v2.1.9) | `WebExtension.MetaData` carries six grant arrays that were never read before: `requiredPermissions`, `requiredOrigins`, `grantedOptionalPermissions`, `grantedOptionalOrigins`, `optionalDataCollectionPermissions` and `grantedOptionalDataCollectionPermissions`. The **Details** dialog now shows required site access plus any granted optional permissions/origins (permission *names* only), and `ExtensionManager.logGrants()` records asked-vs-granted at attach and at every prompt behind `EXTDBG`. The host-less path of the install/optional/update prompts still denies — that is the only safe answer with no dialog to ask with — but it is now logged instead of being silent. |
+| **JS prompts: answered exactly once** (v2.1.9, crash fix) | Every alert/confirm/prompt/`<select>`/date/time/auth/file/beforeunload dialog resolves through one `Resolution` guard. The old code called `finish(prompt.dismiss())`, and Kotlin evaluates the argument *before* the lambda, so the second dismissal path (Android dismissing the dialog after a button press, or Gecko withdrawing the prompt on navigation) reached `BasePrompt.dismiss()` on an already-completed prompt — which GV155 throws on (`"Cannot confirm/dismiss a Prompt twice."`). Responses are now produced *inside* the guard, the `GeckoResult` completes exactly once, and a prompt with no Activity is dismissed explicitly (same reply GeckoView derives from `null`, but it also clears the entry from `PromptStorage`). |
 | Enable / disable / uninstall | `enable/disable(ext, EnableSource.USER)`, `uninstall(ext)`; state changes mirrored via `AddonManagerDelegate`. |
 | Allow in private sessions | Per-extension overflow toggle → `setAllowedInPrivateBrowsing(ext, allowed)`; reads `metaData.allowedInPrivateBrowsing`. This is the opt-in our Incognito sessions need (they run with `usePrivateMode(session.isPrivate)`), and Gecko's default is **false**. |
 | **Add extension by url** (v2.1.7, label restored in v2.1.8) | The Extensions screen's menu entry accepts three shapes: a direct `.xpi` URL, a full `addons.mozilla.org/addon/…` page, or just an add-on slug. AMO pages/slugs are resolved through `AmoApi.detail()` (public v5 API) and only then handed to `install()`; a pasted HTML page is never sent to Gecko as if it were an add-on. |
@@ -33,7 +36,16 @@ active-tab wiring, per-session delegates and tab-specific actions, popup lifecyc
 | Background scripts, content scripts, storage, webRequest, cookies … | Run inside Gecko exactly as in Firefox for Android. |
 
 ## Cannot work here (architecture, documented instead of faked)
-- **No per-session isolation of extensions.** Extensions are runtime-wide: one install, one `browser.storage`, one background page. They can enumerate tabs of *every* browser session and, with host permissions, read cookies of every contextual identity (`browser.cookies` with `storeId`). GeckoView offers no per-contextId enable/disable.
+- **No per-session isolation of extensions.** Extensions are runtime-wide: one install, one `browser.storage`, one background page. They can enumerate tabs of *every* browser session. GeckoView offers no per-`contextId` enable/disable.
+- **`browser.cookies` works per session as of v2.1.9** — the cookie store id *is* the session context. The two breaks that used to make every call fail *before* touching a cookie are patched at the only place they live: inside `assets/omni.ja`. `tools/patch_omni_cookies.py` rewrites three Gecko files so that
+  - `GeckoViewTab` exposes `sessionContextId` — the **safe** `"gvctx"+hex` id `GeckoSessionSettings.setContextId()` derives from our `contextId` — alongside the existing `userContextId`, which still exposes the raw `"session-<id>"` string;
+  - `ext-toolkit.js` learns two extra stores, `firefox-gvctx-<safeId>` (normal) and `firefox-gvctxp-<safeId>` (private), and `ext-cookies.js` maps them onto the `geckoViewSessionContextId` origin attribute in **both** directions (`oaFromDetails()` when building a filter, `convertCookie()` when reporting a cookie back), plus `isValidCookieStoreId()`, `getOriginAttributesPatternForCookieStoreId()` and `getAllCookieStores()`.
+
+  That makes `cookies.get` / `getAll` / `set` / `remove` / `onChanged`, `tab.cookieStoreId` and `getAllCookieStores()` all address **exactly one** session's jar, with `get`/`getAll`/`remove`/`set` taking the exact `getCookiesFromHost()` path. The patched file is committed at `app/src/main/assets/omni.ja`; AGP's asset merge gives the app's own source set priority over the GeckoView AAR's `assets/omni.ja`, and the CI step **"Verify packaged omni.ja carries the cookie patch"** re-hashes `assets/omni.ja` out of every built APK and fails the run if the stock file won the merge — without that assertion a merge-priority surprise would ship a build where cookies silently work no better than before.
+- **Session isolation is still structural, not a convention.** Nothing was relaxed to make this work: `contextId` is untouched, no cookie is fabricated, and `browser.cookies` still cannot reach another session's jar. `CookieStorage::GetCookiesFromHost()` resolves `mHostTable.GetEntry(CookieKey(baseDomain, originAttributes))`, and `mozilla::OriginAttributes` both **hashes** and **compares** `mGeckoViewSessionContextId` (`caps/OriginAttributes.h`), so a filter carrying the wrong — or no — session context matches **nothing**. The failure mode is an empty result, never a merge with another session's cookies; that holds even for an add-on that bypasses this patch and passes `firefox-default`. Access is still gated the Firefox way: the `cookies` permission, host permissions (`allowedOrigins.matchesCookie`), `checkSetCookiePermissions()` on every `set()`, and `context.privateBrowsingAllowed` before any private store is touched. Incognito sessions are additionally kept in Gecko's in-memory store, so their cookies are unreachable from a normal store in both dimensions (storage *and* origin attribute).
+- **Documented limitation — an add-on must select the store explicitly.** Omitting `storeId`, or passing `firefox-default`, builds a filter with `geckoViewSessionContextId = ""`, which matches **no** isolated session. That is Firefox's own container semantics, not a regression: in Firefox, `cookies.getAll({url})` from a container tab does not return that container's cookies either — the caller has to pass `storeId`. `ext-cookies.js` cannot infer the caller's session on its own (the cookies API runs in the parent process and `context` exposes only `incognito`, `privateBrowsingAllowed` and `extension`), so doing it implicitly would be a guess, and a wrong guess here would return another session's data instead of an empty list. Add-ons that read `tab.cookieStoreId` first — Cookie-Editor, uBlock Origin and most cookie managers — are unaffected.
+- **Documented limitation — `getAllCookieStores()` can enumerate every session's store.** It is derived from `browser.tabs`, which is runtime-wide (see above), so an add-on holding both the `cookies` permission and host permission for a site can discover that site's stores across sessions and read them. This is Firefox's container model applied to our sessions, and the alternative — omitting them — would make `getAllCookieStores()` contradict the tabs it is supposed to describe. Cookie **values** are never logged by this app.
+- **Upgrading GeckoView does not remove the patch.** Current mozilla-central's `ext-cookies.js` / `ext-toolkit.js` still contain **no reference** to `geckoViewSessionContextId`, so the round-trip is missing upstream too. `tools/patch_omni_cookies.py` pins the SHA-256 of the stock `assets/omni.ja` and refuses to patch an archive it does not recognise: when `geckoViewVersion` in `app/build.gradle.kts` changes, bump `SOURCE_GV_VERSION` / `SOURCE_OMNI_SHA256` alongside it, re-run `patch`, and commit the regenerated asset.
 - **Update checks are Gecko's, not ours.** Corrected in v2.1.7: GeckoView 155 *does* expose
   `WebExtensionController.update(WebExtension) -> GeckoResult<WebExtension>` (verified against the
   extracted GV155 `classes.jar`; the earlier claim in this file that the method did not exist was
@@ -67,7 +79,34 @@ or from another GeckoView version.
 | Extension context menus (`menus` API) | Not surfaced to apps (see above). | Documented as unsupported instead of faked. |
 | App-side translations (`TranslationsDelegate`) | Not present in GV155. | "Translate" only appears in the selection toolbar if the system offers a `PROCESS_TEXT` handler; the app does not claim a built-in translate feature. |
 
+## WebExtension API surface in GeckoView 155 (read out of the extracted `omni.ja`)
+
+The AAR's `assets/omni.ja` (14.9 MB) is the real extension engine. This list comes from
+`chrome/toolkit/content/extensions/schemas/*.json`, cross-checked against the `ext-*.js` modules that
+register each `ExtensionAPI` — not from MDN, and not from another Gecko version.
+
+**Present — the add-on really gets these:** `activityLog`, `alarms`, `browserAction`, `browserSettings`,
+`browsingData`, `clipboard`, `contentScripts`, `cookies`, `declarativeNetRequest`, `dns`, `downloads`,
+`extension`, `i18n`, `idle`, `management`, `networkStatus`, `notifications`, `pageAction`, `permissions`,
+`privacy`, `protocolHandlers`, `proxy`, `runtime`, `scripting`, `storage`, `tabs`, `theme`, `userScripts`,
+`webNavigation`, `webRequest` — plus GeckoView's own `ext-android.js` / `ext-c-android.js`.
+
+**Absent entirely — no module and no schema:** `bookmarks`, `commands`, `contextMenus` / `menus`,
+`devtools`, `find`, `fullscreen`, `geolocation`, `history`, `omnibox`, `search`, `sessions`,
+`sidebarAction`, `topSites`, `windows`. Gecko itself rejects those calls as "not defined", so the app
+never has to fake, trap or stub them.
+
+**`runtime.getBrowserInfo` works** (`ext-runtime.js:335`) — it is not one of the gaps.
+
+**Optional permissions are answered, not pushed.** `WebExtensionController.addOptionalPermissions(...)` /
+`removeOptionalPermissions(...)` and the `onOptionalPermissionsChanged(extension)` delegate all exist in
+GV155, and the app deliberately does **not** call them: `browser.permissions.request()` already arrives on
+`onOptionalPrompt`, and granting optional access from a native control would add a new permission-decision
+surface with no on-device evidence that Gecko requires it. The grant arrays `WebExtension.MetaData`
+reports are surfaced in the Details dialog instead.
+
 ## Next steps (if wanted)
+
 - Per-tab action rendering in the tabs sheet; `ensureBuiltIn` for a bundled helper extension (would also give a JS executor and a content-script based media-track killer as an alternative to reload-based revocation).
-- `EXTDBG` (the temporary 2.1.8 extension diagnostic switch in `extensions/ExtensionManager.kt`) plus its call sites: removed together with the 2.1.8 bring-up in 2.1.9.
+- `EXTDBG` (the temporary 2.1.8 extension diagnostic switch in `extensions/ExtensionManager.kt`): **kept, default `false`** (v2.1.9 decision A3). Every call site is guarded, so the switch compiles out to nothing at runtime; the call sites are what the prompt-grant diagnostics and the v2.1.9 `logGrants()` write to.
 - AMO: pagination (the API returns `next`/`page_count`) and showing `current_version.compatibility.android.min/max` before install.

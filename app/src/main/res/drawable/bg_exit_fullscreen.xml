@@ -1,7 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Background of the floating "exit fullscreen" control (the only way out of fullscreen since
-     the bottom HUD was removed in v2.1.7). -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+     the bottom HUD was removed in v2.1.7).
+
+     v2.1.9: it floats over the PAGE, not over app chrome, so it is self-contained rather than
+     theme-derived: a dark neutral disc keeps it from vanishing on light pages, and the light ring
+     keeps the disc itself visible on dark pages (the previous version had no ring and tinted its
+     cross with ?attr/colorOnSurface, which is near-black in the light theme - a dark cross on a
+     dark disc). The cross is forced to white in activity_browser.xml for the same reason. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
     <solid android:color="#CC202124" />
-    <corners android:radius="24dp" />
+    <stroke
+        android:width="1.5dp"
+        android:color="#B3FFFFFF" />
 </shape>

@@ -34,6 +34,14 @@
             android:key="zoom_enabled"
             android:title="@string/pref_zoom"
             android:defaultValue="true" />
+        <ListPreference
+            android:key="page_scale"
+            android:title="@string/pref_page_scale"
+            android:summary="@string/pref_page_scale_summary"
+            android:entries="@array/page_scale_entries"
+            android:entryValues="@array/page_scale_values"
+            android:defaultValue="100"
+            app:useSimpleSummaryProvider="true" />
         <SwitchPreferenceCompat
             android:key="media_autoplay"
             android:title="@string/pref_autoplay"

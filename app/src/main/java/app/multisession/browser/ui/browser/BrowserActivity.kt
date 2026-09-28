@@ -55,6 +55,7 @@ import app.multisession.browser.data.db.SessionEntity
 import app.multisession.browser.downloads.AppDownloadManager
 import app.multisession.browser.downloads.DownloadStatus
 import app.multisession.browser.engine.BrowserHost
+import app.multisession.browser.engine.PageScale
 import app.multisession.browser.engine.SessionFactory
 import app.multisession.browser.engine.WebNotifications
 import app.multisession.browser.extensions.AmoApi
@@ -1004,6 +1005,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         entry(R.drawable.ic_align_top, R.string.scroll_top, enabled = hasPage) { scrollPage(top = true) }
         entry(R.drawable.ic_align_bottom, R.string.scroll_bottom, enabled = hasPage) { scrollPage(top = false) }
         entry(R.drawable.ic_desktop, R.string.desktop_site, enabled = hasPage, checked = tab?.desktopMode == true) { tab?.let { toggleDesktop(it) } }
+        // v2.1.9: per-site page zoom (the global default lives in Settings).
+        entry(R.drawable.ic_zoom, R.string.page_scale, enabled = hasPage) { tab?.let { showPageScaleDialog(it) } }
         entry(R.drawable.ic_lock, R.string.site_permissions, enabled = hasPage) { tab?.let { openSitePermissions(it) } }
         entry(R.drawable.ic_fullscreen, if (toolbarHidden) R.string.toolbar_show else R.string.hide_toolbar) { setToolbarHidden(!toolbarHidden) }
         entry(R.drawable.ic_star, R.string.bookmarks) { openUrlLauncher.launch(Intent(this, BookmarksActivity::class.java)) }
@@ -1128,6 +1131,48 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         tab.geckoSession?.reload()
         core.tabs.persistTab(tab)
         snack(getString(if (tab.desktopMode) R.string.desktop_on else R.string.desktop_off))
+    }
+
+    /**
+     * v2.1.9 page-scale picker: one row per 10% step, 50%..200%, plus an explicit "use the default"
+     * row. The chosen percent is written as a per-site rule (SitePermissionType.PAGE_SCALE) so it
+     * survives reloads, tab restores and session switches for that origin; the *global* default is a
+     * separate Settings entry. "Use the default" deletes the rule (writing ASK) rather than storing a
+     * number that merely happens to match the default today, so changing the default in Settings later
+     * still applies to this site.
+     *
+     * Only the in-page script runs - no reload, no lost scroll position (see engine/PageScale).
+     */
+    private fun showPageScaleDialog(tab: Tab) {
+        val origin = SitePermissionStore.originOf(tab.url)
+        if (origin == null) {
+            snack(getString(R.string.page_scale_unavailable))
+            return
+        }
+        val stored = core.sitePermissions.get(tab.sessionId, origin, SitePermissionType.PAGE_SCALE)
+        val hasRule = stored in PageScale.MIN_PERCENT..PageScale.MAX_PERCENT
+        val percents = PageScale.PERCENTS
+        val labels = percents.map { getString(R.string.page_scale_percent, it) }.toMutableList()
+        if (hasRule) labels.add(getString(R.string.page_scale_site_default))
+        val checked = if (hasRule) percents.indexOf(stored) else -1
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.page_scale_dialog_title)
+            .setMessage(getString(R.string.page_scale_dialog_msg, Prefs.pageScaleDefault))
+            .setSingleChoiceItems(labels.toTypedArray(), checked) { d, which ->
+                if (which < percents.size) {
+                    val percent = percents[which]
+                    PageScale.setPerSite(core, tab, percent)
+                    PageScale.applyFor(core, tab)
+                    snack(getString(R.string.page_scale_set, percent))
+                } else {
+                    PageScale.clearPerSite(core, tab)
+                    PageScale.applyFor(core, tab)
+                    snack(getString(R.string.page_scale_reset))
+                }
+                d.dismiss()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     /** Shares the current page (page title + URL). The chooser is labelled so it can never be
@@ -1287,7 +1332,11 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     }
 
     override fun onExtensionNewTab(ext: WebExtension, url: String?, active: Boolean): Tab? {
-        val sid = core.sessions.activeId ?: return null
+        // Prefer the session that owns the tab the user is actually looking at: `activeId` is only
+        // the selected workspace, and it can be null or out of step with the rendered tab while a
+        // session switch is in flight — `tabs.create` from an add-on's background page would then
+        // silently open nothing. Fall back to the active session for the start page.
+        val sid = core.tabs.displayedTab?.sessionId ?: core.sessions.activeId ?: return null
         val tab = core.tabs.createExtensionTab(sid, url) ?: return null   // shown as soon as Gecko starts loading it (onPageStart)
         updateTabCount()
         return tab
@@ -1732,6 +1781,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         }
         if (src != null && isImage) {
             items += getString(R.string.open_image_new_tab) to { openForeground(src) }
+            items += getString(R.string.open_image_background_tab) to { openBackground(src) }
             items += getString(R.string.open_image_this_tab) to { if (tab.id == currentTabId) navigate(src) else openForeground(src) }
             items += getString(R.string.copy_image_address) to { copyToClipboard(src) }
             items += getString(R.string.share_image) to { shareUrl(src, title) }
@@ -1739,6 +1789,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         }
         if (src != null && isMedia) {
             items += getString(R.string.open_media_new_tab) to { openForeground(src) }
+            items += getString(R.string.open_media_background_tab) to { openBackground(src) }
+            items += getString(R.string.open_media_this_tab) to { if (tab.id == currentTabId) navigate(src) else openForeground(src) }
             items += getString(R.string.copy_media_address) to { copyToClipboard(src) }
             items += getString(R.string.share_media_address) to { shareUrl(src, title) }
             items += getString(R.string.save_media) to { downloadUrl(src) }

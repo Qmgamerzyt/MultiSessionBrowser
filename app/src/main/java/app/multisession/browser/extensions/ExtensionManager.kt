@@ -103,12 +103,22 @@ fun installErrorMessage(context: Context, t: Throwable): String {
  *    browser session; browser.runtime.openOptionsPage.
  *  - downloads.download(): fetched by the app and written straight to the public Downloads folder, with
  *    progress and STATE_COMPLETE / STATE_INTERRUPTED reported back (ExtensionDownloadRunner).
- *  - background scripts, content scripts, webRequest, storage, cookies, etc. run inside Gecko exactly as in Firefox.
+ *  - background scripts, content scripts, webRequest, storage, etc. run inside Gecko exactly as in Firefox.
+ *  - cookies (v2.1.9): addressable PER browser session. Stock GeckoView only partitions cookies by userContextId /
+ *    privateBrowsingId, so browser.cookies could not reach our jars at all (that was a real, documented defect, not a
+ *    permission problem). tools/patch_omni_cookies.py rewrites three files inside assets/omni.ja - GeckoViewTab
+ *    exposes the SAFE "gvctx"+hex id next to the raw userContextId, ext-toolkit.js gains the stores
+ *    "firefox-gvctx-<id>" / "firefox-gvctxp-<id>", ext-cookies.js maps them onto the geckoViewSessionContextId
+ *    origin attribute in both directions - so get/getAll/set/remove/onChanged and tab.cookieStoreId all address
+ *    exactly one session's jar. Isolation is untouched: CookieStorage looks cookies up by a hash that includes
+ *    mGeckoViewSessionContextId, so a wrong or missing context matches NOTHING rather than another session's jar.
+ *    The committed asset is re-hashed out of every built APK in CI, so a bad asset merge fails the run instead of
+ *    silently shipping broken cookies. See docs/EXTENSIONS.md for the two remaining documented limitations
+ *    (an add-on must pass storeId explicitly; getAllCookieStores() can enumerate every session's store).
  *
  * Documented limitations (Android/GeckoView architecture, not app bugs - see docs/EXTENSIONS.md):
  *  - Extensions are runtime-wide. Their storage (browser.storage) and background pages are NOT partitioned by our
- *    browser sessions (contextId); an extension can see tabs of every session (browser.tabs) and, with host
- *    permissions, read cookies of every contextual identity (browser.cookies with storeId). There is no per-session
+ *    browser sessions (contextId); an extension can see tabs of every session (browser.tabs). There is no per-session
  *    enable/disable in GeckoView.
  *  - No sidebar, no devtools panels, no native messaging, no browser.windows UI (one window), no keyboard commands UI,
  *    no context-menu items (menus API renders nothing in GeckoView), no omnibox keywords, no downloads.open();
@@ -307,6 +317,9 @@ class ExtensionManager(private val core: BrowserCore) {
             // forever, so the add-on's promise never settled. The runner answers it honestly -
             // a rejected promise when the fetch cannot start, never a silent hang.
             ext.setDownloadDelegate(downloadDelegate)
+            // Baseline of what Gecko granted this add-on, so a prompt-time grant can be compared
+            // against it later without ever printing anything but permission names.
+            logGrants("wire", ext)
         } catch (t: Throwable) {
             AppLog.w(TAG, "wire failed for ${ext.id}", t)
         }
@@ -324,9 +337,16 @@ class ExtensionManager(private val core: BrowserCore) {
         override fun onInstallPromptRequest(
             extension: WebExtension, permissions: Array<String>, origins: Array<String>, dataCollectionPermissions: Array<String>,
         ): GeckoResult<WebExtension.PermissionPromptResponse>? {
-            val h = host ?: return GeckoResult.fromValue(WebExtension.PermissionPromptResponse(false, false, false))
+            logGrants("install-prompt", extension, permissions, origins, dataCollectionPermissions)
+            val h = host
+            if (h == null) {
+                // Deliberate deny, not an omission: with no host there is no dialog to ask with.
+                AppLog.w(TAG, "Install prompt auto-denied: no host (id=${extension.id})")
+                return GeckoResult.fromValue(WebExtension.PermissionPromptResponse(false, false, false))
+            }
             val result = GeckoResult<WebExtension.PermissionPromptResponse>()
             h.onExtensionInstallPrompt(extension, permissions.toList(), origins.toList(), dataCollectionPermissions.toList()) { allow ->
+                if (EXTDBG) AppLog.d(EXTDBG_TAG, "install-prompt answered allow=$allow id=${extension.id}")
                 result.complete(WebExtension.PermissionPromptResponse(allow, false, false))
             }
             return result
@@ -335,20 +355,61 @@ class ExtensionManager(private val core: BrowserCore) {
         override fun onUpdatePrompt(
             extension: WebExtension, newPermissions: Array<String>, newOrigins: Array<String>, newDataCollectionPermissions: Array<String>,
         ): GeckoResult<AllowOrDeny>? {
-            val h = host ?: return GeckoResult.deny()
+            logGrants("update-prompt", extension, newPermissions, newOrigins, newDataCollectionPermissions)
+            val h = host
+            if (h == null) {
+                // Deny is the only safe answer: an update that adds access must never be accepted
+                // silently, and `GeckoResult.deny()` is GeckoView's documented rejection value.
+                AppLog.w(TAG, "Update prompt auto-denied: no host (id=${extension.id})")
+                return GeckoResult.deny()
+            }
             val result = GeckoResult<AllowOrDeny>()
-            h.onExtensionOptionalPrompt(extension, newPermissions.toList(), newOrigins.toList()) { allow -> result.complete(if (allow) AllowOrDeny.ALLOW else AllowOrDeny.DENY) }
+            h.onExtensionOptionalPrompt(extension, newPermissions.toList(), newOrigins.toList()) { allow ->
+                if (EXTDBG) AppLog.d(EXTDBG_TAG, "update-prompt answered allow=$allow id=${extension.id}")
+                result.complete(if (allow) AllowOrDeny.ALLOW else AllowOrDeny.DENY)
+            }
             return result
         }
 
         override fun onOptionalPrompt(
             extension: WebExtension, permissions: Array<String>, origins: Array<String>, dataCollectionPermissions: Array<String>,
         ): GeckoResult<AllowOrDeny>? {
-            val h = host ?: return GeckoResult.deny()
+            logGrants("optional-prompt", extension, permissions, origins, dataCollectionPermissions)
+            val h = host
+            if (h == null) {
+                AppLog.w(TAG, "Optional-permission prompt auto-denied: no host (id=${extension.id})")
+                return GeckoResult.deny()
+            }
             val result = GeckoResult<AllowOrDeny>()
-            h.onExtensionOptionalPrompt(extension, permissions.toList(), origins.toList()) { allow -> result.complete(if (allow) AllowOrDeny.ALLOW else AllowOrDeny.DENY) }
+            h.onExtensionOptionalPrompt(extension, permissions.toList(), origins.toList()) { allow ->
+                if (EXTDBG) AppLog.d(EXTDBG_TAG, "optional-prompt answered allow=$allow id=${extension.id}")
+                result.complete(if (allow) AllowOrDeny.ALLOW else AllowOrDeny.DENY)
+            }
             return result
         }
+    }
+
+    /**
+     * The six `WebExtension.MetaData` grant arrays, which are the only place Gecko reports the
+     * difference between what an add-on *asked* for ([permissions]/[origins] at prompt time) and
+     * what it actually *holds* (`requiredPermissions`, `grantedOptionalPermissions`, ...).
+     * Permission and origin **names only** — never a cookie, a value or a URL beyond a pattern —
+     * and never emitted unless [EXTDBG] is on.
+     */
+    private fun logGrants(
+        stage: String, ext: WebExtension,
+        permissions: Array<String>? = null, origins: Array<String>? = null, dataCollection: Array<String>? = null,
+    ) {
+        if (!EXTDBG) return
+        fun names(values: Array<String>?) = if (values.isNullOrEmpty()) "-" else values.joinToString(",")
+        val m = ext.metaData
+        AppLog.d(
+            EXTDBG_TAG,
+            "$stage id=${ext.id} askedP=${names(permissions)} askedO=${names(origins)} askedDC=${names(dataCollection)} " +
+                "requiredP=${names(m.requiredPermissions)} requiredO=${names(m.requiredOrigins)} " +
+                "grantedOptP=${names(m.grantedOptionalPermissions)} grantedOptO=${names(m.grantedOptionalOrigins)} " +
+                "grantedDC=${names(m.grantedOptionalDataCollectionPermissions)}",
+        )
     }
 
     /**

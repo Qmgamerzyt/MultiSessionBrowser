@@ -15,3 +15,5 @@
 *.jks
 *.keystore
 !gradle/wrapper/gradle-wrapper.jar
+__pycache__/
+*.pyc

@@ -60,7 +60,14 @@ enum class SitePermissionType(
     LOCAL_DEVICE_ACCESS("local_device", GECKO_LOCAL_DEVICE_ACCESS, R.string.perm_label_local_device, false, emptyList()),
     LOCAL_NETWORK_ACCESS("local_network", GECKO_LOCAL_NETWORK_ACCESS, R.string.perm_label_local_network, false, emptyList()),
     /** Not a web permission: a per-site "always load as desktop site" rule (ALLOW = desktop UA/viewport, BLOCK = force mobile). Applied in TabDelegates.onLoadRequest. */
-    DESKTOP_SITE("desktop_site", null, R.string.perm_label_desktop_site, true, emptyList());
+    DESKTOP_SITE("desktop_site", null, R.string.perm_label_desktop_site, true, emptyList()),
+    /**
+     * Not a web permission: a per-site page zoom. The stored value *is* the percent (50..200) rather than
+     * ALLOW/BLOCK, and ASK (the default "no rule" value) means "follow the global default in Settings" —
+     * which is why `set(..., ASK)` deleting the row is exactly the reset. Never managed in the Site
+     * permissions dialog: zoom is offered as its own app-menu control (engine/PageScale).
+     */
+    PAGE_SCALE("page_scale", null, R.string.perm_label_page_scale, false, emptyList());
 
     companion object {
         /** Content permission types answered without any user decision (see BrowserActivity.onContentPermissionRequest). */

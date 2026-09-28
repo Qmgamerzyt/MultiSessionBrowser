@@ -82,6 +82,11 @@ class SettingsFragment : PreferenceFragmentCompat(), SharedPreferences.OnSharedP
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
-        if (key == Prefs.KEY_THEME) AppCompatDelegate.setDefaultNightMode(Prefs.nightMode())
+        when (key) {
+            Prefs.KEY_THEME -> AppCompatDelegate.setDefaultNightMode(Prefs.nightMode())
+            // The global default changed: the tab on screen has to follow it now. Tabs in the
+            // background pick it up when they become displayed (TabManager.setDisplayed).
+            Prefs.KEY_PAGE_SCALE -> app.multisession.browser.engine.PageScale.applyDisplayed(core)
+        }
     }
 }

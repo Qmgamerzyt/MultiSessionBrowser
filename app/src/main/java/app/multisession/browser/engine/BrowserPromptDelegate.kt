@@ -38,17 +38,58 @@ import java.util.Calendar
  * Native UI for everything Gecko asks the embedder to show: JS alert/confirm/prompt,
  * <select> menus, date/time inputs, HTTP authentication, file upload, beforeunload, popups.
  * Dialogs are dismissed automatically when the page navigates away (PromptInstanceDelegate).
+ *
+ * Every prompt is answered through [Resolution], which is what keeps the delegate crash-free:
+ * GeckoView's `BasePrompt.confirm()`/`dismiss()` throw `"Cannot confirm/dismiss a Prompt twice."`,
+ * so the response must be *produced* only after this object has claimed the prompt. Callers hand
+ * over a lambda (`finish { prompt.dismiss() }`) instead of a value, because a value would be
+ * evaluated eagerly — the exact shape of the old `finish(prompt.dismiss())` double-dismiss crash.
  */
 class BrowserPromptDelegate(private val core: BrowserCore, private val tab: Tab) : GeckoSession.PromptDelegate {
 
     private val host: BrowserHost? get() = core.tabs.host
+
+    /**
+     * Single-answer guard for one prompt: `UNRESOLVED -> ANSWERED`, never twice.
+     *
+     * The [respond] lambda is invoked only after the guard is claimed, so `prompt.confirm(...)`
+     * / `prompt.dismiss()` runs at most once, and the `GeckoResult` is completed exactly once.
+     * Everything happens on the UI thread (all of these entry points are `@UiThread`), so the
+     * check-then-act below cannot interleave.
+     */
+    private class Resolution(private val prompt: BasePrompt, private val result: GeckoResult<PromptResponse>) {
+
+        private var answered = false
+
+        /**
+         * Completes the prompt with the value produced by [respond] and resolves the pending
+         * `GeckoResult`. @return true when this call was the one that answered the prompt.
+         */
+        fun answer(respond: () -> PromptResponse): Boolean {
+            if (answered) {
+                AppLog.w(TAG, "Dropping duplicate answer for ${prompt::class.java.simpleName}")
+                return false
+            }
+            if (prompt.isComplete) {
+                // Only this class completes prompts, so guard and GeckoView disagree. Claim it
+                // and never touch the prompt again — calling into it would throw.
+                AppLog.w(TAG, "Prompt already complete for ${prompt::class.java.simpleName}")
+                answered = true
+                return false
+            }
+            // Claim before producing: respond() and result.complete() may re-enter dismiss paths.
+            answered = true
+            result.complete(respond())
+            return true
+        }
+    }
 
     override fun onAlertPrompt(session: GeckoSession, prompt: AlertPrompt): GeckoResult<PromptResponse>? =
         show(prompt) { ctx, finish ->
             MaterialAlertDialogBuilder(ctx)
                 .setTitle(prompt.title ?: pageHost())
                 .setMessage(prompt.message)
-                .setPositiveButton(android.R.string.ok) { _, _ -> finish(prompt.dismiss()) }
+                .setPositiveButton(android.R.string.ok) { _, _ -> finish { prompt.dismiss() } }
                 .create()
         }
 
@@ -57,8 +98,8 @@ class BrowserPromptDelegate(private val core: BrowserCore, private val tab: Tab)
             MaterialAlertDialogBuilder(ctx)
                 .setTitle(prompt.title ?: pageHost())
                 .setMessage(prompt.message)
-                .setPositiveButton(android.R.string.ok) { _, _ -> finish(prompt.confirm(ButtonPrompt.Type.POSITIVE)) }
-                .setNegativeButton(android.R.string.cancel) { _, _ -> finish(prompt.confirm(ButtonPrompt.Type.NEGATIVE)) }
+                .setPositiveButton(android.R.string.ok) { _, _ -> finish { prompt.confirm(ButtonPrompt.Type.POSITIVE) } }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> finish { prompt.confirm(ButtonPrompt.Type.NEGATIVE) } }
                 .create()
         }
 
@@ -69,8 +110,8 @@ class BrowserPromptDelegate(private val core: BrowserCore, private val tab: Tab)
                 .setTitle(prompt.title ?: pageHost())
                 .setMessage(prompt.message)
                 .setView(input)
-                .setPositiveButton(android.R.string.ok) { _, _ -> finish(prompt.confirm(input.text.toString())) }
-                .setNegativeButton(android.R.string.cancel) { _, _ -> finish(prompt.dismiss()) }
+                .setPositiveButton(android.R.string.ok) { _, _ -> finish { prompt.confirm(input.text.toString()) } }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> finish { prompt.dismiss() } }
                 .create()
         }
 
@@ -79,8 +120,8 @@ class BrowserPromptDelegate(private val core: BrowserCore, private val tab: Tab)
             MaterialAlertDialogBuilder(ctx)
                 .setTitle(R.string.leave_page_title)
                 .setMessage(R.string.leave_page_message)
-                .setPositiveButton(R.string.leave) { _, _ -> finish(prompt.confirm(AllowOrDeny.ALLOW)) }
-                .setNegativeButton(R.string.stay) { _, _ -> finish(prompt.confirm(AllowOrDeny.DENY)) }
+                .setPositiveButton(R.string.leave) { _, _ -> finish { prompt.confirm(AllowOrDeny.ALLOW) } }
+                .setNegativeButton(R.string.stay) { _, _ -> finish { prompt.confirm(AllowOrDeny.DENY) } }
                 .create()
         }
 
@@ -89,8 +130,8 @@ class BrowserPromptDelegate(private val core: BrowserCore, private val tab: Tab)
             MaterialAlertDialogBuilder(ctx)
                 .setTitle(R.string.repost_title)
                 .setMessage(R.string.repost_message)
-                .setPositiveButton(R.string.resend) { _, _ -> finish(prompt.confirm(AllowOrDeny.ALLOW)) }
-                .setNegativeButton(android.R.string.cancel) { _, _ -> finish(prompt.confirm(AllowOrDeny.DENY)) }
+                .setPositiveButton(R.string.resend) { _, _ -> finish { prompt.confirm(AllowOrDeny.ALLOW) } }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> finish { prompt.confirm(AllowOrDeny.DENY) } }
                 .create()
         }
 
@@ -109,9 +150,12 @@ class BrowserPromptDelegate(private val core: BrowserCore, private val tab: Tab)
                 .setMessage(prompt.message ?: prompt.title)
                 .setView(view)
                 .setPositiveButton(R.string.sign_in) { _, _ ->
-                    finish(if (onlyPassword) prompt.confirm(pass.text.toString()) else prompt.confirm(user.text.toString(), pass.text.toString()))
+                    finish {
+                        if (onlyPassword) prompt.confirm(pass.text.toString())
+                        else prompt.confirm(user.text.toString(), pass.text.toString())
+                    }
                 }
-                .setNegativeButton(android.R.string.cancel) { _, _ -> finish(prompt.dismiss()) }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> finish { prompt.dismiss() } }
                 .create()
         }
 
@@ -129,16 +173,19 @@ class BrowserPromptDelegate(private val core: BrowserCore, private val tab: Tab)
                 val checked = BooleanArray(flat.size) { flat[it].selected }
                 builder.setMultiChoiceItems(labels, checked) { _, i, v -> checked[i] = v || flat[i].disabled && flat[i].selected }
                     .setPositiveButton(android.R.string.ok) { _, _ ->
-                        finish(prompt.confirm(flat.filterIndexed { i, _ -> checked[i] }.map { it.id }.toTypedArray()))
+                        val picked = flat.filterIndexed { i, _ -> checked[i] }.map { it.id }.toTypedArray()
+                        finish { prompt.confirm(picked) }
                     }
-                    .setNegativeButton(android.R.string.cancel) { _, _ -> finish(prompt.dismiss()) }
+                    .setNegativeButton(android.R.string.cancel) { _, _ -> finish { prompt.dismiss() } }
             } else {
                 val current = flat.indexOfFirst { it.selected }
                 builder.setSingleChoiceItems(labels, current) { d, i ->
                     if (flat[i].disabled) return@setSingleChoiceItems
-                    finish(prompt.confirm(flat[i]))
+                    val picked = flat[i]
+                    finish { prompt.confirm(picked) }
+                    // Closing the dialog re-enters the dismiss listener; the guard makes it a no-op.
                     d.dismiss()
-                }.setNegativeButton(android.R.string.cancel) { _, _ -> finish(prompt.dismiss()) }
+                }.setNegativeButton(android.R.string.cancel) { _, _ -> finish { prompt.dismiss() } }
             }
             builder.create()
         }
@@ -149,37 +196,47 @@ class BrowserPromptDelegate(private val core: BrowserCore, private val tab: Tab)
             MaterialAlertDialogBuilder(ctx)
                 .setTitle(R.string.pick_color)
                 .setView(input)
-                .setPositiveButton(android.R.string.ok) { _, _ -> finish(prompt.confirm(input.text.toString())) }
-                .setNegativeButton(android.R.string.cancel) { _, _ -> finish(prompt.dismiss()) }
+                .setPositiveButton(android.R.string.ok) { _, _ -> finish { prompt.confirm(input.text.toString()) } }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> finish { prompt.dismiss() } }
                 .create()
         }
 
     /** <input type=date|time|month|week|datetime-local>. Values are exchanged in the HTML value format. */
     override fun onDateTimePrompt(session: GeckoSession, prompt: DateTimePrompt): GeckoResult<PromptResponse>? {
-        val act = host?.activity ?: return null
+        val act = host?.activity ?: return answerNow(prompt) { prompt.dismiss() }
+        if (act.isFinishing || act.isDestroyed) return answerNow(prompt) { prompt.dismiss() }
         val result = GeckoResult<PromptResponse>()
-        var finished = false
-        val finish: (PromptResponse) -> Unit = { r -> if (!finished) { finished = true; result.complete(r) } }
+        val resolution = Resolution(prompt, result)
+        val finish: (() -> PromptResponse) -> Unit = { respond -> resolution.answer(respond) }
+        // Gecko withdrew the prompt (navigated away): answer first, then close the picker.
+        fun attachWithdrawGuard(dialog: android.app.Dialog) {
+            prompt.setDelegate(object : PromptInstanceDelegate {
+                override fun onPromptDismiss(p: BasePrompt) {
+                    resolution.answer { prompt.dismiss() }
+                    if (dialog.isShowing) dialog.dismiss()
+                }
+            })
+        }
         val cal = Calendar.getInstance()
         when (prompt.type) {
             DateTimePrompt.Type.DATE -> {
                 Regex("(\\d{4})-(\\d{2})-(\\d{2})").find(prompt.defaultValue ?: "")?.let { m ->
                     cal.set(m.groupValues[1].toInt(), m.groupValues[2].toInt() - 1, m.groupValues[3].toInt())
                 }
-                val dlg = DatePickerDialog(act, { _, y, mo, d -> finish(prompt.confirm(String.format("%04d-%02d-%02d", y, mo + 1, d))) },
+                val dlg = DatePickerDialog(act, { _, y, mo, d -> finish { prompt.confirm(String.format("%04d-%02d-%02d", y, mo + 1, d)) } },
                     cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH))
-                dlg.setOnDismissListener { finish(prompt.dismiss()) }
-                prompt.setDelegate(object : PromptInstanceDelegate { override fun onPromptDismiss(p: BasePrompt) { if (dlg.isShowing) dlg.dismiss() } })
+                dlg.setOnDismissListener { resolution.answer { prompt.dismiss() } }
+                attachWithdrawGuard(dlg)
                 dlg.show()
             }
             DateTimePrompt.Type.TIME -> {
                 Regex("(\\d{2}):(\\d{2})").find(prompt.defaultValue ?: "")?.let { m ->
                     cal.set(Calendar.HOUR_OF_DAY, m.groupValues[1].toInt()); cal.set(Calendar.MINUTE, m.groupValues[2].toInt())
                 }
-                val dlg = TimePickerDialog(act, { _, h, m -> finish(prompt.confirm(String.format("%02d:%02d", h, m))) },
+                val dlg = TimePickerDialog(act, { _, h, m -> finish { prompt.confirm(String.format("%02d:%02d", h, m)) } },
                     cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE), android.text.format.DateFormat.is24HourFormat(act))
-                dlg.setOnDismissListener { finish(prompt.dismiss()) }
-                prompt.setDelegate(object : PromptInstanceDelegate { override fun onPromptDismiss(p: BasePrompt) { if (dlg.isShowing) dlg.dismiss() } })
+                dlg.setOnDismissListener { resolution.answer { prompt.dismiss() } }
+                attachWithdrawGuard(dlg)
                 dlg.show()
             }
             else -> {
@@ -192,11 +249,11 @@ class BrowserPromptDelegate(private val core: BrowserCore, private val tab: Tab)
                 val dlg = MaterialAlertDialogBuilder(act)
                     .setTitle(prompt.title ?: hint)
                     .setView(input)
-                    .setPositiveButton(android.R.string.ok) { _, _ -> finish(prompt.confirm(input.text.toString())) }
-                    .setNegativeButton(android.R.string.cancel) { _, _ -> finish(prompt.dismiss()) }
+                    .setPositiveButton(android.R.string.ok) { _, _ -> finish { prompt.confirm(input.text.toString()) } }
+                    .setNegativeButton(android.R.string.cancel) { _, _ -> finish { prompt.dismiss() } }
                     .create()
-                dlg.setOnDismissListener { finish(prompt.dismiss()) }
-                prompt.setDelegate(object : PromptInstanceDelegate { override fun onPromptDismiss(p: BasePrompt) { if (dlg.isShowing) dlg.dismiss() } })
+                dlg.setOnDismissListener { resolution.answer { prompt.dismiss() } }
+                attachWithdrawGuard(dlg)
                 dlg.show()
             }
         }
@@ -205,16 +262,27 @@ class BrowserPromptDelegate(private val core: BrowserCore, private val tab: Tab)
 
     /** <input type=file>: the host runs the system picker (documents, gallery, camera capture). */
     override fun onFilePrompt(session: GeckoSession, prompt: FilePrompt): GeckoResult<PromptResponse>? {
-        val h = host ?: return null
+        val h = host ?: return answerNow(prompt) { prompt.dismiss() }
         val result = GeckoResult<PromptResponse>()
+        val resolution = Resolution(prompt, result)
+        // Gecko can withdraw this prompt while the system picker is still open (the page navigates
+        // away, the session is closed). Without this delegate the `result` would never be completed
+        // and, worse, the picker's callback would later confirm/dismiss a prompt Gecko already
+        // dropped - exactly the double-answer this class exists to prevent.
+        prompt.setDelegate(object : PromptInstanceDelegate {
+            override fun onPromptDismiss(p: BasePrompt) {
+                resolution.answer { prompt.dismiss() }
+            }
+        })
         val multiple = prompt.type == FilePrompt.Type.MULTIPLE
         val capture = prompt.capture != FilePrompt.Capture.NONE
         h.pickFiles(prompt.mimeTypes, multiple, capture) { uris ->
-            if (prompt.isComplete) return@pickFiles
-            when {
-                uris.isNullOrEmpty() -> result.complete(prompt.dismiss())
-                multiple -> result.complete(prompt.confirm(h.activity, uris))
-                else -> result.complete(prompt.confirm(h.activity, uris[0]))
+            resolution.answer {
+                when {
+                    uris.isNullOrEmpty() -> prompt.dismiss()
+                    multiple -> prompt.confirm(h.activity, uris)
+                    else -> prompt.confirm(h.activity, uris[0])
+                }
             }
         }
         return result
@@ -223,20 +291,20 @@ class BrowserPromptDelegate(private val core: BrowserCore, private val tab: Tab)
     /** Gecko's popup blocker caught a window.open without user gesture: keep it blocked. */
     override fun onPopupPrompt(session: GeckoSession, prompt: PopupPrompt): GeckoResult<PromptResponse>? {
         AppLog.i(TAG, "Popup blocked (no user gesture): ${prompt.targetUri?.take(60)}")
-        return GeckoResult.fromValue(prompt.confirm(AllowOrDeny.DENY))
+        return answerNow(prompt) { prompt.confirm(AllowOrDeny.DENY) }
     }
 
     /** navigator.share(): hand the payload to the Android share sheet. */
     override fun onSharePrompt(session: GeckoSession, prompt: SharePrompt): GeckoResult<PromptResponse>? {
-        val act = host?.activity ?: return GeckoResult.fromValue(prompt.confirm(SharePrompt.Result.FAILURE))
+        val act = host?.activity ?: return answerNow(prompt) { prompt.confirm(SharePrompt.Result.FAILURE) }
         val text = listOfNotNull(prompt.text, prompt.uri).joinToString("\n")
         return try {
             val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
             prompt.title?.let { send.putExtra(Intent.EXTRA_SUBJECT, it) }
             act.startActivity(Intent.createChooser(send, act.getString(R.string.share)))
-            GeckoResult.fromValue(prompt.confirm(SharePrompt.Result.SUCCESS))
+            answerNow(prompt) { prompt.confirm(SharePrompt.Result.SUCCESS) }
         } catch (t: Throwable) {
-            GeckoResult.fromValue(prompt.confirm(SharePrompt.Result.FAILURE))
+            answerNow(prompt) { prompt.confirm(SharePrompt.Result.FAILURE) }
         }
     }
 
@@ -245,20 +313,42 @@ class BrowserPromptDelegate(private val core: BrowserCore, private val tab: Tab)
     private fun pageHost(): String = UrlUtils.displayHost(tab.url).ifBlank { tab.url }
 
     /**
-     * Shows a dialog for [prompt] and returns the pending result. The result is completed exactly
-     * once: by a button, by the dialog being dismissed (-> prompt.dismiss()), or ignored when Gecko
-     * itself withdrew the prompt (page navigated away), in which case the dialog is closed.
+     * Resolves a prompt that has no UI to attach to (no host yet, or the Activity is going away)
+     * with a plain dismiss. Geckoview treats this exactly like returning `null` — `PromptController`
+     * turns it into `callback.sendSuccess(null)` — but unlike `null` it also completes the prompt,
+     * so GeckoView drops it from `PromptStorage` instead of keeping a dangling entry.
      */
-    private fun show(prompt: BasePrompt, build: (Context, (PromptResponse) -> Unit) -> AlertDialog): GeckoResult<PromptResponse>? {
-        val act = host?.activity ?: return null
-        if (act.isFinishing || act.isDestroyed) return null
+    private fun answerNow(prompt: BasePrompt, respond: () -> PromptResponse): GeckoResult<PromptResponse> {
         val result = GeckoResult<PromptResponse>()
-        var finished = false
-        val finish: (PromptResponse) -> Unit = { r -> if (!finished) { finished = true; result.complete(r) } }
+        Resolution(prompt, result).answer(respond)
+        return result
+    }
+
+    /**
+     * Shows a dialog for [prompt] and returns the pending result. The result is completed exactly
+     * once: by a button, by the dialog being dismissed (-> prompt.dismiss()), or when Gecko itself
+     * withdrew the prompt (page navigated away), in which case the dialog is closed after the
+     * prompt has already been answered.
+     */
+    private fun show(
+        prompt: BasePrompt,
+        build: (Context, (() -> PromptResponse) -> Unit) -> AlertDialog,
+    ): GeckoResult<PromptResponse> {
+        val act = host?.activity ?: return answerNow(prompt) { prompt.dismiss() }
+        if (act.isFinishing || act.isDestroyed) return answerNow(prompt) { prompt.dismiss() }
+        val result = GeckoResult<PromptResponse>()
+        val resolution = Resolution(prompt, result)
+        val finish: (() -> PromptResponse) -> Unit = { respond -> resolution.answer(respond) }
         val dialog = build(act, finish)
-        dialog.setOnDismissListener { finish(prompt.dismiss()) }
+        // Android dismisses the dialog itself after a button click, so this fires on every answer:
+        // the guard makes the second call a no-op instead of a GeckoView throw.
+        dialog.setOnDismissListener { resolution.answer { prompt.dismiss() } }
         prompt.setDelegate(object : PromptInstanceDelegate {
-            override fun onPromptDismiss(p: BasePrompt) { if (dialog.isShowing) dialog.dismiss() }
+            override fun onPromptDismiss(p: BasePrompt) {
+                // GeckoView only withdrew the UI here; the prompt is still open on our side.
+                resolution.answer { prompt.dismiss() }
+                if (dialog.isShowing) dialog.dismiss()
+            }
         })
         dialog.show()
         return result

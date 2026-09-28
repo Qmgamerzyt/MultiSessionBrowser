@@ -22,6 +22,8 @@ object Prefs {
     const val KEY_ASK_DOWNLOAD = "ask_before_download"
     const val KEY_AUTOPLAY = "media_autoplay"
     const val KEY_ZOOM = "zoom_enabled"
+    /** Global page-scale default (percent, stored as a string because it comes from a ListPreference). */
+    const val KEY_PAGE_SCALE = "page_scale"
     const val KEY_SAFE_BROWSING = "safe_browsing"
     const val KEY_OPEN_EXTERNAL_APPS = "open_external_apps"
     const val KEY_LIVE_TAB_LIMIT = "live_tab_limit"
@@ -57,6 +59,14 @@ object Prefs {
     val askBeforeDownload: Boolean get() = sp.getBoolean(KEY_ASK_DOWNLOAD, true)
     val mediaAutoplay: Boolean get() = sp.getBoolean(KEY_AUTOPLAY, false)
     val zoomEnabled: Boolean get() = sp.getBoolean(KEY_ZOOM, true)
+
+    /**
+     * Global default page scale in percent (50..200, 100 = no scaling). Hard-coded here rather than
+     * read from `engine.PageScale` so `core` never depends on the engine; the bounds are the same ones
+     * `PageScale.clamp` enforces. A site with its own rule ignores this — see `engine/PageScale`.
+     */
+    val pageScaleDefault: Int
+        get() = (sp.getString(KEY_PAGE_SCALE, "100") ?: "100").toIntOrNull()?.coerceIn(50, 200) ?: 100
     val safeBrowsing: Boolean get() = sp.getBoolean(KEY_SAFE_BROWSING, true)
     val openExternalApps: Boolean get() = sp.getBoolean(KEY_OPEN_EXTERNAL_APPS, true)
     /** WebRTC device compatibility prefs for Gecko (audio output enumeration / full-duplex audio). Default on. */

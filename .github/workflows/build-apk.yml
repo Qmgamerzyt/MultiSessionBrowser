@@ -127,6 +127,21 @@ jobs:
           gradle assembleRelease --no-daemon --stacktrace
           ls -l app/build/outputs/apk/release/
 
+      # Guarantees the patched assets/omni.ja actually reached every APK. app/src/main/assets/omni.ja holds the
+      # browser.cookies per-session patch (tools/patch_omni_cookies.py) and has to outrank the GeckoView AAR's stock
+      # assets/omni.ja in AGP's asset merge. If that priority ever changed the build would still go green while
+      # cookies quietly stopped working on device, so hash the file INSIDE each built APK instead of trusting it.
+      - name: Verify packaged omni.ja carries the cookie patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/patch_omni_cookies.py verify-source
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk)
+          if [ ${#apks[@]} -eq 0 ]; then echo "::error::no APKs found to verify"; exit 1; fi
+          echo "checking ${#apks[@]} APK(s)"
+          python3 tools/patch_omni_cookies.py verify-apk --apk "${apks[@]}"
+
       # Guarantees "updates install in place": every APK must carry the ONE pinned signing certificate.
       # A mismatch means a future update would be rejected by Android (signatures do not match), so the
       # run fails BEFORE anything is uploaded or attached. See BUGFIX_UPDATE_SIGNATURE.md.

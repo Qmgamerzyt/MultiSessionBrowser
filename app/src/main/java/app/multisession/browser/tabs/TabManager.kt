@@ -13,6 +13,7 @@ import app.multisession.browser.data.db.ClosedTabEntity
 import app.multisession.browser.data.db.HistoryEntity
 import app.multisession.browser.data.db.TabGroupEntity
 import app.multisession.browser.engine.BrowserHost
+import app.multisession.browser.engine.PageScale
 import app.multisession.browser.engine.SessionFactory
 import app.multisession.browser.permissions.SitePermissionStore
 import kotlinx.coroutines.Dispatchers
@@ -587,7 +588,16 @@ class TabManager(private val core: BrowserCore) {
      * so its completion value is undefined: Gecko therefore never replaces the document with a returned string.
      * Only this app-initiated load passes NavigationDelegate.onLoadRequest (see [Tab.pendingScript]).
      */
-    fun runScript(tab: Tab, source: String): Boolean {
+    fun runScript(tab: Tab, source: String): Boolean = loadScript(tab, source, internal = false)
+
+    /**
+     * Runs one of the app's own scripts (page scale) through the same `javascript:` loader, but tagged
+     * in [Tab.internalScript] and flagged with [Tab.internalLoad] so it can never be confused with a
+     * bookmarklet and never produces visible page-load state. See [PageScale].
+     */
+    fun runInternalScript(tab: Tab, source: String): Boolean = loadScript(tab, source, internal = true)
+
+    private fun loadScript(tab: Tab, source: String, internal: Boolean): Boolean {
         val gs = tab.geckoSession?.takeIf { it.isOpen } ?: return false
         if (tab.isStartPage) return false
         var body = source.trim()
@@ -597,11 +607,23 @@ class TabManager(private val core: BrowserCore) {
         // pre-encoded bookmarklets (%20 ...) are not double-encoded.
         val safe = body.replace("%0A", "\n").replace("#", "%23").replace("\r", "%0D").replace("\n", "%0A").replace("\t", "%09")
         val wrapped = "javascript:(function(){try{$safe\n}catch(e){console.error('[bookmarklet]',e)}})();void 0"
-        tab.pendingScript = wrapped
+        if (internal) {
+            tab.internalScript = wrapped
+            tab.internalLoad = true
+        } else {
+            tab.pendingScript = wrapped
+        }
         try {
             gs.load(GeckoSession.Loader().uri(wrapped))
         } catch (t: Throwable) {
-            tab.pendingScript = null
+            // Never leave a slot set that Gecko will not be asked to consume: a stale slot would
+            // authorize whatever javascript: navigation happens to arrive next.
+            if (internal) {
+                tab.internalScript = null
+                tab.internalLoad = false
+            } else {
+                tab.pendingScript = null
+            }
             AppLog.w(TAG, "runScript failed", t)
             return false
         }
@@ -720,7 +742,14 @@ class TabManager(private val core: BrowserCore) {
             }
             core.extensions.setTabActive(gs, isIt)
         }
-        if (changed) host?.onDisplayedTabChanged(displayed)
+        if (changed) {
+            host?.onDisplayedTabChanged(displayed)
+            // A restored / re-hibernated tab can hold a document that was never given this session's
+            // page scale (its `appliedScale` is still null even though the DOM may already carry the
+            // zoom from before). Cheap no-op once the document matches: PageScale skips the in-page
+            // load when the current percent already equals the wanted one.
+            displayed?.let { PageScale.applyFor(core, it) }
+        }
     }
 
     /** Background tabs that may be hibernated automatically: not displayed, not a pending popup, not playing / capturing media. */

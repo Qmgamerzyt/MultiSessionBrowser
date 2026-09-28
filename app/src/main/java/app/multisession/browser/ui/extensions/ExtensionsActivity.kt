@@ -233,6 +233,11 @@ class ExtensionsActivity : AppCompatActivity(), ExtensionHost {
      * author, required permissions and the stable add-on id Gecko installed under. No extra request is
      * made and nothing is invented; when the add-on publishes an AMO or homepage address the dialog
      * links to it in a browser tab.
+     *
+     * v2.1.9: also shows the site access the add-on requires and, when it holds any, the optional
+     * permissions/origins Gecko has actually granted it (`grantedOptionalPermissions` /
+     * `grantedOptionalOrigins`). Gecko reports these itself, so nothing is inferred - an empty list
+     * simply stays off the dialog.
      */
     private fun showDetails(ext: WebExtension) {
         val m = ext.metaData
@@ -241,6 +246,12 @@ class ExtensionsActivity : AppCompatActivity(), ExtensionHost {
         val desc = m.description
         val author = m.creatorName
         val perms = m.requiredPermissions
+        val origins = m.requiredOrigins
+        val grantedP = m.grantedOptionalPermissions
+        val grantedO = m.grantedOptionalOrigins
+        val granted = mutableListOf<String>()
+        if (!grantedP.isNullOrEmpty()) granted.addAll(grantedP)
+        if (!grantedO.isNullOrEmpty()) granted.addAll(grantedO)
         val msg = buildString {
             if (!desc.isNullOrBlank()) { append(desc.trim()); append("\n\n") }
             append(getString(R.string.ext_amo_version, m.version ?: "?"))
@@ -248,6 +259,14 @@ class ExtensionsActivity : AppCompatActivity(), ExtensionHost {
             if (!perms.isNullOrEmpty()) {
                 append("\n\n")
                 append(getString(R.string.ext_amo_permissions, perms.joinToString("\n") { "\u2022 $it" }))
+            }
+            if (!origins.isNullOrEmpty()) {
+                append("\n\n")
+                append(getString(R.string.ext_details_origins, origins.joinToString("\n") { "\u2022 $it" }))
+            }
+            if (granted.isNotEmpty()) {
+                append("\n\n")
+                append(getString(R.string.ext_details_granted, granted.joinToString("\n") { "\u2022 $it" }))
             }
             append("\n\n").append(getString(R.string.ext_details_id, ext.id))
         }

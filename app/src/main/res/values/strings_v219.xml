@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v2.1.9: deep audit - prompt single-resolution crash fix, WebExtension permission/cookie
+     compatibility, page scale, pull-to-refresh and drawer gesture sensitivity. -->
+<resources>
+    <!-- extensions -->
+    <string name="ext_details_origins">Site access:\n%1$s</string>
+    <string name="ext_details_granted">Granted optional access:\n%1$s</string>
+
+    <!-- page scale (Settings + app menu) -->
+    <string name="pref_page_scale">Page scale</string>
+    <string name="pref_page_scale_summary">Default zoom for every page. A site can override it from the app menu.</string>
+    <string name="perm_label_page_scale">Page scale</string>
+    <string name="page_scale">Page scale</string>
+    <string name="page_scale_dialog_title">Page scale</string>
+    <string name="page_scale_dialog_msg">Zoom for this site only. The global default (%1$d%%) is set in Settings.</string>
+    <string name="page_scale_percent">%1$d%%</string>
+    <string name="page_scale_site_default">Use the default for this site</string>
+    <string name="page_scale_set">Page scale %1$d%% for this site</string>
+    <string name="page_scale_reset">Using the default page scale for this site</string>
+    <string name="page_scale_unavailable">Page scale is not available on this page</string>
+
+    <!-- long-press context menu: background-tab variants that were missing for images and media -->
+    <string name="open_image_background_tab">Open image in background tab</string>
+    <string name="open_media_this_tab">Open media in this tab</string>
+    <string name="open_media_background_tab">Open media in background tab</string>
+</resources>

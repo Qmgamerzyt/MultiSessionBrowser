@@ -8,6 +8,7 @@ import android.view.ViewConfiguration
 import android.widget.FrameLayout
 import android.widget.ProgressBar
 import androidx.core.view.isVisible
+import kotlin.math.abs
 
 /**
  * v2.1.7 (issue H): pull-to-refresh wrapper around the GeckoView.
@@ -21,6 +22,22 @@ import androidx.core.view.isVisible
  *
  * Deliberately touch-based instead of nested scrolling: GeckoView is not assumed to implement the
  * nested-scrolling child protocol, so nothing here depends on an API that may not exist.
+ *
+ * v2.1.9 (gesture sensitivity): three independent gates keep a normal page scroll from ever
+ * becoming a refresh, without ever disabling the pull itself:
+ *  1. **Trigger area** - the finger must start in the top band of the container (top 40%, at least
+ *     96dp), so a pull started halfway down the screen belongs to the page, not to us.
+ *  2. **Axis lock** - the gesture's direction is decided once, after 48dp of movement, from the
+ *     *relative* horizontal/vertical travel. Only a clearly vertical (downward) gesture may be
+ *     intercepted; a horizontal or diagonal one is handed straight to the page and the decision is
+ *     final for the rest of that gesture (no flip-flopping mid-drag).
+ *  3. **Threshold** - [refreshDistance] was raised 96dp -> 160dp, so an inertial fling that happens
+ *     to start at the top of the page cannot reach it. [canRefresh] is re-checked at the moment of
+ *     interception and again on release, and ACTION_CANCEL always aborts.
+ *
+ * The owner of each gesture is therefore explicit: vertical = page scroll, and only a deliberate
+ * downward pull in the top band = refresh. No second gesture recognizer is added - this class stays
+ * the single place that decides, and it only ever *declines* to intercept, never to consume.
  */
 class PullRefreshFrameLayout @JvmOverloads constructor(
     context: Context,
@@ -31,12 +48,19 @@ class PullRefreshFrameLayout @JvmOverloads constructor(
     /** Runs when the pull passes the threshold (reload the current tab). */
     var onRefresh: (() -> Unit)? = null
 
-    /** Consulted at ACTION_DOWN: only a page at scroll offset 0 (and not fullscreen) may start a pull. */
+    /** Consulted at ACTION_DOWN and again at intercept/release: only a page at scroll offset 0 (and not fullscreen) may pull. */
     var canRefresh: () -> Boolean = { false }
 
     private val density = resources.displayMetrics.density
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
-    private val refreshDistance = 96f * density
+    /** Movement needed before the axis of a gesture may be decided: far above touch slop, so jitter never locks a direction. */
+    private val axisLockSlop = 48f * density
+    /** Minimum height of the pull trigger area at the top of the container. */
+    private val minTriggerArea = 96f * density
+    /** The trigger area is this share of the container's height (its floor is [minTriggerArea]). */
+    private val triggerAreaRatio = 0.40f
+    /** Pull distance that fires the refresh. Raised from 96dp (v2.1.7) so ordinary scrolling can't reach it. */
+    private val refreshDistance = 160f * density
     private val autoHideMs = 20_000L
 
     private val indicator = ProgressBar(context).apply {
@@ -47,8 +71,12 @@ class PullRefreshFrameLayout @JvmOverloads constructor(
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
     }
 
+    private enum class Axis { UNDECIDED, VERTICAL, HORIZONTAL }
+
+    private var startX = 0f
     private var startY = 0f
     private var pullDistance = 0f
+    private var axis = Axis.UNDECIDED
     private var armed = false
     private var pulling = false
     private var refreshing = false
@@ -78,32 +106,55 @@ class PullRefreshFrameLayout @JvmOverloads constructor(
         } else if (indicator.isVisible) {
             indicator.isVisible = false
         }
-        if (!value) { armed = false; pulling = false }
+        if (!value) { armed = false; pulling = false; axis = Axis.UNDECIDED }
     }
+
+    /** Top band of the container in which a pull may start: top 40%, never less than 96dp. */
+    private fun triggerAreaBottom(): Float = maxOf(minTriggerArea, height * triggerAreaRatio)
 
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                startX = ev.x
                 startY = ev.y
                 pullDistance = 0f
                 pulling = false
-                armed = canRefresh()
+                axis = Axis.UNDECIDED
+                // Gate 1: top band only. Everything below it is plain page scrolling, whatever the page is doing.
+                armed = ev.y <= triggerAreaBottom() && canRefresh()
             }
             MotionEvent.ACTION_MOVE -> {
-                if (armed && !pulling && ev.y - startY > touchSlop) {
-                    pulling = true
-                    indicator.alpha = 0.35f
-                    indicator.isVisible = true
-                    return true
+                if (armed && !pulling) {
+                    val dx = abs(ev.x - startX)
+                    val dy = ev.y - startY
+                    // Gate 2: decide the axis once, after 48dp of travel, and keep it for the whole gesture.
+                    if (axis == Axis.UNDECIDED && (dx > axisLockSlop || abs(dy) > axisLockSlop)) {
+                        axis = if (abs(dy) > dx * 1.5f) Axis.VERTICAL else Axis.HORIZONTAL
+                    }
+                    // Gate 3 + re-check: only a downward vertical pull past the slop is ours, and only
+                    // if the page is still at its top right now.
+                    if (axis == Axis.VERTICAL && dy > axisLockSlop && canRefresh()) {
+                        pulling = true
+                        indicator.alpha = 0.35f
+                        indicator.isVisible = true
+                        return true
+                    }
                 }
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> armed = false
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                armed = false
+                pulling = false
+                axis = Axis.UNDECIDED
+            }
         }
         return super.onInterceptTouchEvent(ev)
     }
 
     override fun onTouchEvent(ev: MotionEvent): Boolean {
-        if (!armed && !pulling) return super.onTouchEvent(ev)
+        // Only a gesture we actually intercepted (pulling) may drive the indicator or fire a refresh.
+        // `armed` alone must not reach this method: otherwise a drag the GeckoView declines to take
+        // could charge a distance in complete silence and reload the page with no indicator shown.
+        if (!pulling) return super.onTouchEvent(ev)
         when (ev.actionMasked) {
             MotionEvent.ACTION_MOVE -> {
                 pullDistance = (ev.y - startY).coerceAtLeast(0f)
@@ -112,9 +163,11 @@ class PullRefreshFrameLayout @JvmOverloads constructor(
                 return true
             }
             MotionEvent.ACTION_UP -> {
-                val trigger = pullDistance >= refreshDistance
+                // Re-check at release too: the page may have been scrolled by the drag itself.
+                val trigger = pullDistance >= refreshDistance && canRefresh()
                 pulling = false
                 armed = false
+                axis = Axis.UNDECIDED
                 if (trigger) {
                     setRefreshing(true)
                     onRefresh?.invoke()
@@ -124,8 +177,10 @@ class PullRefreshFrameLayout @JvmOverloads constructor(
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
+                // Cancel always aborts: nothing may fire off a gesture the system took away from us.
                 pulling = false
                 armed = false
+                axis = Axis.UNDECIDED
                 if (!isRefreshing) indicator.isVisible = false
                 return true
             }
