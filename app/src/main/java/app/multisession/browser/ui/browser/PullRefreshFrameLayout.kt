@@ -13,7 +13,7 @@ import kotlin.math.abs
 /**
  * v2.1.7 (issue H): pull-to-refresh wrapper around the GeckoView.
  *
- * How it works: the gesture only arms when [canRefresh] says the page is scrolled to its very top
+ * How it works: the gesture only arms when [canArm] says the page is scrolled to its very top
  * (Chrome/Firefox Android behave the same - a pull on a scrolled page is a normal drag). Once armed,
  * a downward drag past the touch slop is intercepted from the GeckoView and shown as a small
  * indeterminate spinner; releasing past [refreshDistance] fires [onRefresh] (BrowserActivity reloads
@@ -35,9 +35,14 @@ import kotlin.math.abs
  *     to start at the top of the page cannot reach it. [canRefresh] is re-checked at the moment of
  *     interception and again on release, and ACTION_CANCEL always aborts.
  *
- * The owner of each gesture is therefore explicit: vertical = page scroll, and only a deliberate
- * downward pull in the top band = refresh. No second gesture recognizer is added - this class stays
- * the single place that decides, and it only ever *declines* to intercept, never to consume.
+ * v2.1.10 (A9, Discord): arming ([canArm], ACTION_DOWN) keeps the cheap legacy root-scroll rules;
+ * interception and release ([canRefresh]) consult GeckoView's `onTouchEventForDetailResult`
+ * (`PanZoomController.InputResultDetail`), which reports the scroll container *under the finger*
+ * (inner scrollers like Discord's message list included), not just the root document. The owner of
+ * each gesture is therefore explicit: vertical = page scroll, and only a deliberate downward pull
+ * in the top band with Gecko's blessing = refresh. No second gesture recognizer is added - this
+ * class stays the single place that decides, and it only ever *declines* to intercept, never to
+ * consume.
  */
 class PullRefreshFrameLayout @JvmOverloads constructor(
     context: Context,
@@ -48,7 +53,15 @@ class PullRefreshFrameLayout @JvmOverloads constructor(
     /** Runs when the pull passes the threshold (reload the current tab). */
     var onRefresh: (() -> Unit)? = null
 
-    /** Consulted at ACTION_DOWN and again at intercept/release: only a page at scroll offset 0 (and not fullscreen) may pull. */
+    /**
+     * Consulted at ACTION_DOWN only: may a gesture arm at all (page not fullscreen, not the start
+     * page, not already refreshing, root document at offset 0). Split from [canRefresh] in v2.1.10
+     * because Gecko's per-gesture detail has not resolved yet when DOWN arrives - arming stays
+     * cheap and synchronous, while [canRefresh] decides the actual interception.
+     */
+    var canArm: () -> Boolean = { false }
+
+    /** Consulted at intercept/release: is the scroll container under the finger at its top edge? (v2.1.10: fed `InputResultDetail`, legacy root-scroll fallback inside.) */
     var canRefresh: () -> Boolean = { false }
 
     private val density = resources.displayMetrics.density
@@ -120,8 +133,9 @@ class PullRefreshFrameLayout @JvmOverloads constructor(
                 pullDistance = 0f
                 pulling = false
                 axis = Axis.UNDECIDED
-                // Gate 1: top band only. Everything below it is plain page scrolling, whatever the page is doing.
-                armed = ev.y <= triggerAreaBottom() && canRefresh()
+                // Gate 1: top band only, plus the cheap legacy page-state rules (canArm). Everything
+                // below the band is plain page scrolling, whatever the page is doing.
+                armed = ev.y <= triggerAreaBottom() && canArm()
             }
             MotionEvent.ACTION_MOVE -> {
                 if (armed && !pulling) {

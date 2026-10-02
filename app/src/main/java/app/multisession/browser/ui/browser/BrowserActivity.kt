@@ -14,6 +14,7 @@ import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.text.format.Formatter
 import android.view.LayoutInflater
@@ -93,6 +94,7 @@ import org.mozilla.geckoview.GeckoSession.PermissionDelegate.ContentPermission
 import org.mozilla.geckoview.GeckoSession.PermissionDelegate.MediaSource
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.GeckoWebExecutor
+import org.mozilla.geckoview.PanZoomController
 import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebRequest
 import org.mozilla.geckoview.WebRequestError
@@ -176,6 +178,18 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     private var extensionPopup: BottomSheetDialog? = null
     /** v2.1.8 option C: the labelled "Extension actions" sheet. */
     private var extensionActions: BottomSheetDialog? = null
+
+    // ---- v2.1.10 (A9): per-gesture GeckoView InputResultDetail for pull-to-refresh ----
+    /** Bumped on every ACTION_DOWN over the page: tags detail results and rejects stale ones. */
+    private var ptrGesture = 0
+    /** When the current gesture started, for the [PTR_DETAIL_WAIT_MS] fallback window. */
+    private var ptrDownAt = 0L
+    /** The gesture id [ptrDetail] belongs to; -1 = none seen yet. */
+    private var ptrDetailGesture = -1
+    /** Detail resolved by GeckoView.onTouchEventForDetailResult for gesture [ptrDetailGesture]. */
+    private var ptrDetail: PanZoomController.InputResultDetail? = null
+    /** How long [webContainer.canRefresh] waits for Gecko's detail before falling back to the legacy root-scroll check. */
+    private val ptrDetailWaitMs = 150L
 
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         handleFileChooserResult(result.resultCode, result.data)
@@ -337,9 +351,23 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         // v2.1.7 (H): pull-to-refresh. The gesture only arms on a page scrolled to its very top and
         // never in fullscreen; refreshing reloads the tab that is on screen (same as the menu Reload).
         webContainer.onRefresh = { currentTab?.let { reload(it) } }
+        // v2.1.10 (A9): arming stays on the legacy root-document check (cheap, synchronous at DOWN);
+        // interception/release ask Gecko's InputResultDetail, which knows about inner scrollers
+        // (Discord's message list scrolls a div, not the document - t.scrollY stayed 0 there, so the
+        // pull armed mid-chat and fired the refresh at the bottom).
+        webContainer.canArm = {
+            val t = currentTab
+            !anyFullScreen && t != null && !t.isStartPage && !webContainer.isRefreshing && t.scrollY <= 0
+        }
         webContainer.canRefresh = {
             val t = currentTab
-            !anyFullScreen && t != null && !t.isStartPage && t.scrollY <= 0 && !webContainer.isRefreshing
+            when {
+                anyFullScreen || t == null || t.isStartPage || webContainer.isRefreshing -> false
+                ptrDetailGesture == ptrGesture && ptrDetail != null ->
+                    pullAllowed(ptrDetail!!) ?: (t.scrollY <= 0)   // undecidable detail → legacy rule
+                SystemClock.uptimeMillis() - ptrDownAt < ptrDetailWaitMs -> false   // detail not resolved yet: wait
+                else -> t.scrollY <= 0   // fallback (legacy root scroll only)
+            }
         }
         errorPage = findViewById(R.id.errorPage)
         backButton = findViewById(R.id.backButton)
@@ -515,13 +543,63 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         currentTab?.let { updateToolbar(it) }
     }
 
-    /** Touching the page always ends search mode and gives focus to the page (dismisses suggestions). */
+    /**
+     * Touching the page always ends search mode and gives focus to the page (dismisses suggestions).
+     *
+     * v2.1.10 (A9): ACTION_DOWN additionally asks GeckoView for the gesture's `InputResultDetail`
+     * via `onTouchEventForDetailResult` - the sanctioned API for exactly this (same dispatch as
+     * `onTouchEvent`, but it answers who owns the touch). We consume DOWN only in that case: the
+     * detail variant performs the identical `requestFocus` + PanZoomController dispatch, so nothing
+     * is lost; later events fall through to the GeckoView as before. Gecko's own note says to call
+     * it for ACTION_DOWN only - one request per gesture, result tagged with [ptrGesture].
+     */
     private val webTouchListener = View.OnTouchListener { v, ev ->
         if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
             if (urlInput.hasFocus()) exitSearchMode()
             if (!v.hasFocus()) v.requestFocus()
+            val gv = v as? GeckoView
+            if (gv != null && gv.session != null) {
+                ptrGesture += 1
+                ptrDownAt = SystemClock.uptimeMillis()
+                ptrDetailGesture = -1
+                ptrDetail = null
+                val gesture = ptrGesture
+                gv.onTouchEventForDetailResult(ev).accept({ d ->
+                    if (gesture == ptrGesture) {
+                        ptrDetail = d
+                        ptrDetailGesture = gesture
+                        AppLog.d("PTR", "gesture=$gesture handled=${d.handledResult()} " +
+                            "scrollable=${d.scrollableDirections()} overscroll=${d.overscrollDirections()}")
+                    }
+                }, { AppLog.d("PTR", "detail failed: $it") })
+                return true // dispatched by onTouchEventForDetailResult (equivalent to onTouchEvent)
+            }
         }
-        false // never consume: the GeckoView handles the event normally
+        false // otherwise never consume: the GeckoView handles the event normally
+    }
+
+    /**
+     * v2.1.10 (A9): may a pull continue, given Gecko's [PanZoomController.InputResultDetail] for
+     * this gesture's DOWN? Mirrors android-components' `InputResultDetail.canOverscrollTop()` -
+     * Mozilla's own pull-to-refresh predicate:
+     *  - the website did not consume the touch (`INPUT_RESULT_HANDLED_CONTENT` → no pull),
+     *  - the container under the finger is already at its top edge (`SCROLLABLE_FLAG_TOP` clear;
+     *    native Axis.cpp sets the flag while it can still scroll up - flag set = NOT at top),
+     *  - and vertical overscroll (rubber-banding) is available there (`OVERSCROLL_FLAG_VERTICAL`),
+     *    which Gecko documents as the "do not trigger pull-to-refresh" discriminator when absent.
+     *
+     * Returns null when the detail does not decide (`UNHANDLED`/`IGNORED`: no APZ verdict - e.g.
+     * not attached, downTime mismatch, event ignored), so the caller keeps the legacy root-scroll
+     * rule instead of dead-ending the gesture.
+     */
+    private fun pullAllowed(d: PanZoomController.InputResultDetail): Boolean? {
+        val atTop = (d.scrollableDirections() and PanZoomController.SCROLLABLE_FLAG_TOP) == 0
+        val overscrollable = (d.overscrollDirections() and PanZoomController.OVERSCROLL_FLAG_VERTICAL) != 0
+        return when (d.handledResult()) {
+            PanZoomController.INPUT_RESULT_HANDLED -> atTop && overscrollable
+            PanZoomController.INPUT_RESULT_HANDLED_CONTENT -> false   // site owns this gesture
+            else -> null
+        }
     }
 
     // ================================================================== session / tab display
