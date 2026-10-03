@@ -12,6 +12,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import app.multisession.browser.BrowserApp
 import app.multisession.browser.R
 import app.multisession.browser.data.db.DownloadEntity
 import app.multisession.browser.ui.downloads.DownloadsActivity
@@ -23,10 +24,14 @@ import app.multisession.browser.ui.downloads.DownloadsActivity
  * foreground; leaving the app gave no feedback at all. Every state change published by
  * [AppDownloadManager] now also lands here:
  *
- *  - running/pending  -> one ongoing notification per download with a progress bar (indeterminate
- *    while the server did not send a length), a Cancel action and a tap that opens the Downloads screen,
- *  - paused           -> the same notification, no longer ongoing, with a Resume action,
- *  - completed/failed -> replaced by an auto-cancelling result notification,
+ *  - running        -> one ongoing notification per download with a progress bar (indeterminate
+ *    while the server did not send a length), Pause + Cancel actions and a tap that opens the
+ *    Downloads screen (v2.1.10 A9: Pause lets you stop a transfer without killing it),
+ *  - pending        -> the same, Cancel only (nothing to pause before the transfer starts),
+ *  - paused           -> the same notification, no longer ongoing, with Resume + Cancel actions
+ *    (v2.1.10 A9: Cancel alongside Resume - a paused download could not be discarded from here),
+ *  - completed/failed -> replaced by an auto-cancelling result notification (v2.1.10 A9: the
+ *    completed one carries Open + Close actions instead of only a tap target),
  *  - cancelled        -> the ongoing notification is simply removed.
  *
  * Two channels: progress is LOW (no sound, no badge, no heads-up) and finished downloads are DEFAULT.
@@ -36,12 +41,15 @@ object DownloadNotifier {
 
     const val ACTION_CANCEL = "app.multisession.browser.action.DOWNLOAD_CANCEL"
     const val ACTION_RESUME = "app.multisession.browser.action.DOWNLOAD_RESUME"
+    const val ACTION_PAUSE = "app.multisession.browser.action.DOWNLOAD_PAUSE"
+    const val ACTION_DISMISS = "app.multisession.browser.action.DOWNLOAD_DISMISS"
     const val EXTRA_DOWNLOAD_ID = "app.multisession.browser.download_id"
 
     private const val CHANNEL_ACTIVE = "downloads_active"
     private const val CHANNEL_FINISHED = "downloads_finished"
     private const val RC_OPEN = 0xD01
     private const val RC_ACTION = 0xD02
+    private const val RC_OPEN_FILE = 0xD03
 
     /** Progress is published every ~300 ms; this keeps the notification update at one IPC per second
      *  (and never re-sends an unchanged percentage). Finished states always go through immediately. */
@@ -65,9 +73,9 @@ object DownloadNotifier {
         }
         when (d.status) {
             DownloadStatus.PENDING, DownloadStatus.RUNNING ->
-                manager.notify(id, active(app, d, ongoing = true, showPause = true))
+                manager.notify(id, active(app, d, ongoing = true))
             DownloadStatus.PAUSED ->
-                manager.notify(id, active(app, d, ongoing = false, showPause = false))
+                manager.notify(id, active(app, d, ongoing = false))
             DownloadStatus.COMPLETED -> {
                 manager.cancel(id)
                 manager.notify(id, finished(app, d, ok = true))
@@ -82,7 +90,7 @@ object DownloadNotifier {
 
     // ------------------------------------------------------------------ builders
 
-    private fun active(context: Context, d: DownloadEntity, ongoing: Boolean, showPause: Boolean): Notification {
+    private fun active(context: Context, d: DownloadEntity, ongoing: Boolean): Notification {
         val paused = d.status == DownloadStatus.PAUSED
         val b = NotificationCompat.Builder(context, CHANNEL_ACTIVE)
             .setSmallIcon(R.drawable.ic_download)
@@ -106,14 +114,18 @@ object DownloadNotifier {
             b.setContentText(context.getString(R.string.dl_status_paused))
             b.setProgress(0, 0, false)
             b.addAction(R.drawable.ic_play, context.getString(R.string.dl_resume), action(context, ACTION_RESUME, d.id))
+        } else if (d.status == DownloadStatus.RUNNING) {
+            // v2.1.10 (A9): pause without losing the transfer. Pending has no Pause - nothing is
+            // running yet, and pause() only accepts active (pending/running) states it can honor.
+            b.addAction(R.drawable.ic_pause, context.getString(R.string.dl_pause), action(context, ACTION_PAUSE, d.id))
         }
-        if (showPause) b.addAction(R.drawable.ic_close, context.getString(R.string.dl_cancel), action(context, ACTION_CANCEL, d.id))
+        b.addAction(R.drawable.ic_close, context.getString(R.string.dl_cancel), action(context, ACTION_CANCEL, d.id))
         return b.build()
     }
 
     private fun finished(context: Context, d: DownloadEntity, ok: Boolean): Notification {
         val reason = d.error?.takeIf { it.isNotBlank() }?.take(200)
-        return NotificationCompat.Builder(context, CHANNEL_FINISHED)
+        val b = NotificationCompat.Builder(context, CHANNEL_FINISHED)
             .setSmallIcon(if (ok) R.drawable.ic_download else R.drawable.ic_error)
             .setContentTitle(
                 context.getString(if (ok) R.string.dl_notif_done else R.string.dl_notif_failed, d.fileName)
@@ -123,7 +135,28 @@ object DownloadNotifier {
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
-            .build()
+        if (ok) {
+            // v2.1.10 (A9): actionable result - open the file directly, or dismiss the card.
+            // Open is an activity PendingIntent (no receiver hop); it is skipped when the file
+            // is already gone (openIntent -> null). Close only cancels this notification.
+            val openIntent = BrowserApp.core().downloads.openIntent(d)
+            if (openIntent != null) {
+                b.addAction(
+                    R.drawable.ic_open_in_new,
+                    context.getString(R.string.dl_open),
+                    PendingIntent.getActivity(
+                        context, RC_OPEN_FILE + d.id.hashCode(), openIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    ),
+                )
+            }
+            b.addAction(
+                R.drawable.ic_close,
+                context.getString(R.string.dl_close),
+                action(context, ACTION_DISMISS, d.id),
+            )
+        }
+        return b.build()
     }
 
     // ------------------------------------------------------------------ plumbing

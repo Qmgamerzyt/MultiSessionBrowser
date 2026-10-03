@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v2.1.10: A9 regression fixes (pull-to-refresh, tab grid, extension popup, download
+     notifications) and the 2.1.10 release strings. -->
+<resources>
+    <!-- download notification: Close action of the finished notification (A9) -->
+    <string name="dl_close">Close</string>
+</resources>
