@@ -165,11 +165,19 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
     }
 
     override fun onTabsChanged(sessionId: String) { if (sessionId == this.sessionId && ::adapter.isInitialized) rebuild() }
-    override fun onTabUpdated(tab: Tab) { if (tab.sessionId == sessionId && ::adapter.isInitialized) adapter.refreshTab(tab) }
+    override fun onTabUpdated(tab: Tab) {
+        if (tab.sessionId != sessionId || !::adapter.isInitialized) return
+        // v2.1.10 (A9): any adapter notification while a drag runs can cancel it mid-gesture
+        // (layout detaches the dragged holder -> clearView sees NO_POSITION -> drop lost).
+        // Defer both: rebuild() runs it after the drop, this just sets the same flag.
+        if (dragHolder != null) { dragPendingRebuild = true; return }
+        adapter.refreshTab(tab)
+    }
 
     // ------------------------------------------------------------------ rows
 
     private fun rebuild() {
+        if (dragHolder != null) { dragPendingRebuild = true; return }
         val sid = sessionId ?: return
         val rows = mutableListOf<Row>()
         val pinned = core.tabs.pinnedTabs(sid)
@@ -239,6 +247,8 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
     private var groupTargetId: String? = null
     private var headerTarget: Row.Header? = null
     private var headerTargetView: View? = null
+    /** A rebuild/tab refresh arrived while a drag ran; consumed right after the drop dispatch. */
+    private var dragPendingRebuild = false
     private val swipePaint = Paint().apply { color = 0x33E53935 }   // translucent red behind a swiping card
 
     /**
@@ -316,6 +326,10 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
      * cleared them first, which is why grouping never fired on release).
      */
     private val dragFingerListener = View.OnTouchListener { _, ev ->
+        // Safety net: a fresh gesture can only start after the previous stream ended, so a
+        // dragHolder left behind by a silently-cancelled drag is stale - clear it (and any
+        // leftover highlight) instead of feeding targets forever.
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN && dragHolder != null) abortStaleDrag()
         if (dragHolder != null) {
             when (ev.actionMasked) {
                 MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -326,6 +340,15 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
             }
         }
         false
+    }
+
+    /** Drops stale drag state left by a cancelled drag (visuals, highlight, deferred rebuild). */
+    private fun abortStaleDrag() {
+        val vh = dragHolder
+        dragHolder = null; draggedRow = null
+        vh?.itemView?.let { it.alpha = 1f; it.scaleX = 1f; it.scaleY = 1f }
+        clearDropTarget()
+        if (dragPendingRebuild) { dragPendingRebuild = false; rebuild() }
     }
 
     /**
@@ -479,9 +502,18 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
         override fun clearView(rv: RecyclerView, vh: RecyclerView.ViewHolder) {
             super.clearView(rv, vh)
             vh.itemView.alpha = 1f; vh.itemView.scaleX = 1f; vh.itemView.scaleY = 1f
-            if (dragHolder !== vh) return   // swipe recovery / idle clear: no drop to dispatch
-            val pos = vh.bindingAdapterPosition
-            val row = if (pos == RecyclerView.NO_POSITION) null else adapter.rows.getOrNull(pos)
+            val active = dragHolder ?: return   // swipe recovery / idle clear: no drop to dispatch
+            if (vh !== active) {
+                // Another row's recovery while our drag runs (or the dragged holder was recreated):
+                // always un-stick the holder we styled; only proceed for the dragged row itself.
+                active.itemView.alpha = 1f; active.itemView.scaleX = 1f; active.itemView.scaleY = 1f
+                val rp = vh.bindingAdapterPosition
+                val rrow = if (rp == RecyclerView.NO_POSITION) null else adapter.rows.getOrNull(rp)
+                if (rrow?.key != draggedRow?.key) return
+            }
+            // Dispatch from the MODEL captured at drag start, never from bindingAdapterPosition:
+            // it reads NO_POSITION in exactly the cancelled-drag case this path must survive.
+            val row = draggedRow
             val targetId = groupTargetId
             val targetHeader = headerTarget
             val fx = fingerX
@@ -496,8 +528,9 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
                 row is Row.Card && targetId != null && targetId != row.tab.id -> groupByDrag(row.tab.id, targetId)
                 row is Row.Card && targetHeader != null -> dropCardOnHeader(row.tab.id, targetHeader)
                 row is Row.Card && !inPlace -> dropCardReorder(row.tab.id, fx, fy, own)
-                row is Row.Header && !inPlace -> dropHeader(pos, fx, fy)
+                row is Row.Header && !inPlace -> dropHeader(adapter.rows.indexOf(row), fx, fy)
             }
+            if (dragPendingRebuild) { dragPendingRebuild = false; rebuild() }
         }
         override fun onSelectedChanged(vh: RecyclerView.ViewHolder?, actionState: Int) {
             super.onSelectedChanged(vh, actionState)
@@ -506,6 +539,9 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
                 draggedRow = vh?.let { adapter.rows.getOrNull(it.bindingAdapterPosition) }
                 clearDropTarget()
                 vh?.itemView?.apply { alpha = 0.9f; scaleX = 1.04f; scaleY = 1.04f }
+            } else if (vh == null) {
+                // Runs right before clearView: a visual net only (state must survive for dispatch).
+                dragHolder?.itemView?.let { it.alpha = 1f; it.scaleX = 1f; it.scaleY = 1f }
             }
         }
         override fun onChildDraw(c: Canvas, rv: RecyclerView, vh: RecyclerView.ViewHolder, dX: Float, dY: Float, actionState: Int, isCurrentlyActive: Boolean) {
@@ -520,6 +556,9 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
 
     private fun setSelectionMode(on: Boolean) {
         if (selectionMode == on) return
+        // v2.1.10 (A9): a second finger tapping "Select" mid-drag would notifyDataSetChanged
+        // and cancel the drag (see onTabUpdated); the drag wins.
+        if (dragHolder != null) return
         selectionMode = on
         if (!on) selected.clear()
         selectionBar.isVisible = on
