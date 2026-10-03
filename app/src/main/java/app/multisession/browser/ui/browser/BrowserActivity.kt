@@ -1375,6 +1375,11 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         }
         gv.setSession(popupSession)
         sheet.setContentView(view)
+        // v2.1.10 (A9): the popup body is a live GeckoView - a drag there belongs to the page and
+        // must never move the sheet (the default draggable behavior did exactly that, so the
+        // popup could not be scrolled: the whole sheet followed the finger instead).
+        sheet.behavior.isDraggable = false
+        enablePopupTitleDrag(sheet, view.findViewById(R.id.popupTitle))
         sheet.setOnDismissListener {
             try { gv.releaseSession() } catch (_: Throwable) {}
             try { popupSession.close() } catch (_: Throwable) {}
@@ -1382,6 +1387,32 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         }
         extensionPopup = sheet
         sheet.show()
+    }
+
+    /**
+     * v2.1.10 (A9): with the sheet not draggable, this is the popup's only gesture: a swipe that
+     * starts on the title bar drags the whole sheet (the `design_bottom_sheet` frame, background
+     * included) down with the finger and dismisses past [threshold]; below it the sheet springs
+     * back. Scrim tap and Back still close it, and the page below the title keeps its own gestures.
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun enablePopupTitleDrag(sheet: BottomSheetDialog, title: View) {
+        val bottomSheet = sheet.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet) ?: return
+        val threshold = 120f * resources.displayMetrics.density
+        var startY = 0f
+        title.setOnTouchListener { _, ev ->
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { startY = ev.rawY; true }
+                MotionEvent.ACTION_MOVE -> { bottomSheet.translationY = (ev.rawY - startY).coerceAtLeast(0f); true }
+                MotionEvent.ACTION_UP -> {
+                    if (bottomSheet.translationY >= threshold) sheet.dismiss()
+                    else bottomSheet.animate().translationY(0f).setDuration(150).start()
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> { bottomSheet.translationY = 0f; true }
+                else -> false
+            }
+        }
     }
 
     override fun isExtensionPopupOpen(): Boolean = extensionPopup?.isShowing == true
