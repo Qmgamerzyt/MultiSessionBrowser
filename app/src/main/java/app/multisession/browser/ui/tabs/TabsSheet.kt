@@ -69,9 +69,13 @@ object GroupEditDialog {
 
 /**
  * Chrome-style tab grid (v2.1.0). Sections: "Pinned" cards, one header + cards per group (collapsible), then
- * "Other tabs". Cards show thumbnail / title / domain / close / active stroke. Long-press drags a card: dropping it
- * under another header moves it into that group; pinned cards only move inside the pinned section and normal cards
- * never enter it (reordering can never unpin). The result is committed with TabManager.applyOrder.
+ * "Other tabs". Cards show thumbnail / title / domain / close / active stroke. Long-press drags - the grid stays
+ * STATIC while the finger moves (v2.1.10), and the release decides everything, Chrome-style: over another tab's
+ * card = the two group immediately (unless both pinned, either pinned, or already in the same group - then it is
+ * a plain reorder); over a group header = join that group; anywhere else = insert at the nearest card's nearer
+ * edge. GROUP headers drag too: the header moves with its visible members as one block, so groups reorder.
+ * Pinned cards only move inside the pinned section and normal cards never enter it (reordering can never unpin).
+ * The result is committed with TabManager.applyOrder (cards) / applyGroupOrder (headers).
  * "Select" enters multi-select mode with a compact bulk action bar. Opening the grid never touches GeckoSessions.
  */
 class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
@@ -128,8 +132,9 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
         recycler.setHasFixedSize(false)
         recycler.setItemViewCacheSize(12)
         touchHelper.attachToRecyclerView(recycler)
-        // v2.1.7 (issues O/P): observe the gesture for swipe + hold-to-group without changing how the
-        // events are delivered (always false -> RecyclerView/ItemTouchHelper see every event as before).
+        // v2.1.7 (issue O) / v2.1.10 (A9): observe the gesture without changing how the events are
+        // delivered (always false -> RecyclerView/ItemTouchHelper see every event as before); the
+        // listener only records the finger so clearView can decide where the drop landed.
         recycler.setOnTouchListener(dragFingerListener)
 
         view.findViewById<View>(R.id.newTabButton).setOnClickListener { browser?.newTab(); dismiss() }
@@ -223,66 +228,112 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
         return Section.OTHER
     }
 
-    // ------------------------------------------------------------------ drag & drop / swipe (v2.1.7)
+    // ------------------------------------------------------------------ drag & drop / swipe (v2.1.7, reworked v2.1.10)
 
     /** Finger tracking while a drag runs (issue P: ItemTouchHelper reports positions, never "on vs beside"). */
     private var dragHolder: RecyclerView.ViewHolder? = null
-    private var fingerSeen = false
+    /** The row currently dragged (card or GROUP header), captured at drag start - stable even while positions shift. */
+    private var draggedRow: Row? = null
     private var fingerX = 0f
     private var fingerY = 0f
     private var groupTargetId: String? = null
-    private var groupTargetCard: MaterialCardView? = null
-    private val holdGroupRunnable = Runnable { evaluateGroupTarget() }
+    private var headerTarget: Row.Header? = null
+    private var headerTargetView: View? = null
     private val swipePaint = Paint().apply { color = 0x33E53935 }   // translucent red behind a swiping card
 
-    private fun resetHoldTimer() { recycler.removeCallbacks(holdGroupRunnable); recycler.postDelayed(holdGroupRunnable, HOLD_GROUP_MS) }
-    private fun cancelHoldTimer() { recycler.removeCallbacks(holdGroupRunnable) }
-    private fun clearGroupTarget() { groupTargetCard?.let { it.strokeWidth = 0 }; groupTargetCard = null; groupTargetId = null }
+    /**
+     * v2.1.10 (A9): clears both drop highlights. The card stroke is restored through refreshTab -
+     * a plain `strokeWidth = 0` would also erase the current-tab stroke that bind() applies.
+     */
+    private fun clearDropTarget() {
+        val prevId = groupTargetId
+        headerTargetView?.alpha = 1f
+        headerTargetView = null
+        headerTarget = null
+        groupTargetId = null
+        if (prevId != null) core.tabs.get(prevId)?.let { adapter.refreshTab(it) }
+    }
+
+    private fun setCardTarget(card: MaterialCardView?, id: String) {
+        if (id == groupTargetId) return
+        clearDropTarget()
+        groupTargetId = id
+        card?.strokeColor = ContextCompat.getColor(requireContext(), R.color.brand_primary)
+        card?.strokeWidth = (3 * resources.displayMetrics.density).toInt()
+    }
+
+    private fun setHeaderTarget(view: View, header: Row.Header) {
+        if (header === headerTarget) return
+        clearDropTarget()
+        headerTarget = header
+        headerTargetView = view
+        view.alpha = 0.55f
+    }
 
     /**
-     * Observes the gesture while ItemTouchHelper is dragging and re-arms the 600 ms hold timer as soon
-     * as the finger moves. Always returns false: RecyclerView keeps the events exactly as before
-     * (ItemTouchHelper installs its own OnItemTouchListener, not an OnTouchListener).
+     * Recomputes where the finger is, on every gesture event: over another tab's card (both
+     * unpinned, not the same group) = grouping target; over a GROUP header while dragging a card
+     * (card ungrouped or in another group) = join target; anything else clears the highlights.
+     */
+    private fun updateDropTarget() {
+        val draggedVh = dragHolder ?: return
+        val under = recycler.findChildViewUnder(fingerX, fingerY)
+        if (under == null || under === draggedVh.itemView) { clearDropTarget(); return }
+        val vh = recycler.getChildViewHolder(under)
+        val src = draggedRow
+        val pos = vh.bindingAdapterPosition
+        val row = if (pos == RecyclerView.NO_POSITION) null else adapter.rows.getOrNull(pos)
+        when {
+            vh is CardVH && src is Row.Card -> {
+                val target = row as? Row.Card
+                // Group on drop unless same group (both ungrouped DOES group - a new one is created),
+                // same id, or either side pinned (pinned tabs are reordered in place, never grouped).
+                val differentGroup = target != null &&
+                    (target.tab.groupId == null || target.tab.groupId != src.tab.groupId)
+                if (target != null && target.tab.id != src.tab.id && !target.tab.pinned &&
+                    !src.tab.pinned && differentGroup
+                ) {
+                    setCardTarget(under as? MaterialCardView, target.tab.id)
+                } else clearDropTarget()
+            }
+            vh is HeaderVH && src is Row.Card -> {
+                val header = row as? Row.Header
+                if (header != null && header.section == Section.GROUP && !src.tab.pinned &&
+                    header.group?.id != src.tab.groupId
+                ) {
+                    setHeaderTarget(under, header)
+                } else clearDropTarget()
+            }
+            else -> clearDropTarget()
+        }
+    }
+
+    /**
+     * Records where the finger is while ItemTouchHelper drags; always returns false, so RecyclerView
+     * and ItemTouchHelper see every event exactly as before (they install their own item touch
+     * listener - this is a plain OnTouchListener on the RecyclerView). UP/CANCEL deliberately do NOT
+     * clear the targets: clearView runs right after this listener and reads them (the old hold-timer
+     * cleared them first, which is why grouping never fired on release).
      */
     private val dragFingerListener = View.OnTouchListener { _, ev ->
         if (dragHolder != null) {
             when (ev.actionMasked) {
-                MotionEvent.ACTION_MOVE -> {
-                    val moved = kotlin.math.abs(ev.x - fingerX) > 6 || kotlin.math.abs(ev.y - fingerY) > 6
-                    fingerX = ev.x; fingerY = ev.y; fingerSeen = true
-                    if (moved) { clearGroupTarget(); resetHoldTimer() }
+                MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    fingerX = ev.x; fingerY = ev.y
+                    updateDropTarget()
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { cancelHoldTimer(); clearGroupTarget() }
                 else -> Unit
             }
         }
         false
     }
 
-    /** The hold elapsed: is the finger resting on a DIFFERENT tab? Then that tab is the group target. */
-    private fun evaluateGroupTarget() {
-        val dragged = dragHolder ?: return
-        if (!fingerSeen) return
-        val under = recycler.findChildViewUnder(fingerX, fingerY) ?: return
-        if (under === dragged.itemView) return                 // resting on its own slot = ordinary reorder
-        val vh = recycler.getChildViewHolder(under) as? CardVH ?: return
-        val pos = vh.bindingAdapterPosition
-        if (pos == RecyclerView.NO_POSITION) return
-        val card = adapter.rows.getOrNull(pos) as? Row.Card ?: return
-        if (card.tab.id == groupTargetId) return
-        clearGroupTarget()
-        groupTargetId = card.tab.id
-        (under as? MaterialCardView)?.let { c ->
-            c.strokeColor = ContextCompat.getColor(requireContext(), R.color.brand_primary)
-            c.strokeWidth = (3 * resources.displayMetrics.density).toInt()
-            groupTargetCard = c
-        }
-    }
-
     /**
-     * v2.1.7 (issue P): dropping a tab after holding it over another tab groups the two. The target
-     * already having a group wins (the dragged tab joins it); otherwise the dragged tab's group is
-     * reused; only then is a new group created (same default name/colour as the group dialog).
+     * v2.1.10 (A9), Chrome-style: dropping a tab onto another tab's card groups the two immediately
+     * (no more 600 ms hold). The target's group wins (the dragged tab joins it); otherwise the
+     * dragged tab's group is reused; only then is a new group created (same default name/colour as
+     * the group dialog). Pinned tabs never group (checked at the highlight already) and same-group
+     * drops fall through to a plain reorder.
      */
     private fun groupByDrag(draggedId: String, targetId: String) {
         val sid = sessionId ?: return
@@ -292,14 +343,118 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
         val gid = target.groupId ?: dragged.groupId
             ?: core.tabs.createGroup(sid, getString(R.string.group_default_name), 0xFF2962FF.toInt()).id
         core.tabs.setTabsGroup(listOf(draggedId, targetId), gid)
-        adapter.dirty = false
         rebuild()
         browser?.snack(getString(R.string.group_created))
     }
 
+    /**
+     * Inserts the card [draggedId] so it lands before row [beforeIndex] (original list coordinates;
+     * rows.size = append). Section rules of the old live-reorder are preserved: a card may never
+     * enter the pinned section it does not belong to, and never above the first header. Committed
+     * with TabManager.applyOrder through commitOrder(); returns false when nothing moved.
+     */
+    private fun moveRowTo(draggedId: String, beforeIndex: Int): Boolean {
+        val from = adapter.rows.indexOfFirst { it is Row.Card && it.tab.id == draggedId }
+        if (from == -1) return false
+        val to = beforeIndex.coerceIn(0, adapter.rows.size)
+        val card = adapter.rows[from] as Row.Card
+        val copy = adapter.rows.toMutableList()
+        copy.removeAt(from)
+        val adj = (if (to > from) to - 1 else to).coerceIn(0, copy.size)
+        if (adj == from) return false                     // would land exactly where it already is
+        val targetSection = sectionAt(copy, adj)
+        if ((targetSection == Section.PINNED) != card.tab.pinned) return false   // pinned stays pinned, normal stays normal
+        if (adj == 0 && copy.isNotEmpty() && copy[0] is Row.Header) return false  // nothing above the first header
+        copy.add(adj, card)
+        adapter.submit(copy)
+        commitOrder()
+        return true
+    }
+
+    /** No grouping target under the finger: insert at the nearest laid-out card, on its nearer edge (gap/below drop). */
+    private fun dropCardReorder(draggedId: String, x: Float, y: Float, exclude: View) {
+        var best: View? = null
+        var bestDist = Float.MAX_VALUE
+        for (i in 0 until recycler.childCount) {
+            val c = recycler.getChildAt(i) ?: continue
+            if (c === exclude) continue
+            if (recycler.getChildViewHolder(c) !is CardVH) continue
+            val p = recycler.getChildViewHolder(c).bindingAdapterPosition
+            if (p == RecyclerView.NO_POSITION || p !in adapter.rows.indices || !(adapter.rows[p] is Row.Card)) continue
+            val dx = maxOf(c.left - x, x - c.right, 0f)
+            val dy = maxOf(c.top - y, y - c.bottom, 0f)
+            val d2 = dx * dx + dy * dy
+            if (d2 < bestDist) { bestDist = d2; best = c }
+        }
+        val target = best ?: return
+        val pos = recycler.getChildViewHolder(target).bindingAdapterPosition
+        if (pos == RecyclerView.NO_POSITION) return
+        val after = x > (target.left + target.right) / 2f || y > (target.top + target.bottom) / 2f
+        moveRowTo(draggedId, if (after) pos + 1 else pos)
+    }
+
+    /** Dropping a card on a group header: land right below the header = first member of that group. */
+    private fun dropCardOnHeader(draggedId: String, header: Row.Header) {
+        val hIdx = adapter.rows.indexOf(header)
+        if (hIdx == -1) return
+        moveRowTo(draggedId, hIdx + 1)
+    }
+
+    /**
+     * v2.1.10: a GROUP header drags its block (header + its visible cards) to a new spot among the
+     * groups - before the nearest group header whose upper half the finger is in, or right after
+     * that header's block below its center. The move is clamped to the GROUP region (never above
+     * the first group header, never below the OTHER header) and a drop on its own span is a no-op.
+     * Only the model order changes: TabManager.applyGroupOrder notifies, rebuild() re-renders.
+     */
+    private fun dropHeader(fromPos: Int, x: Float, y: Float) {
+        val sid = sessionId ?: return
+        val header = adapter.rows.getOrNull(fromPos) as? Row.Header ?: return
+        if (header.section != Section.GROUP) return
+        var best: RecyclerView.ViewHolder? = null
+        var bestDist = Float.MAX_VALUE
+        for (i in 0 until recycler.childCount) {
+            val c = recycler.getChildAt(i) ?: continue
+            val h = recycler.getChildViewHolder(c) as? HeaderVH ?: continue
+            val p = h.bindingAdapterPosition
+            if (p == RecyclerView.NO_POSITION || p == fromPos) continue
+            val row = adapter.rows.getOrNull(p) as? Row.Header ?: continue
+            if (row.section != Section.GROUP) continue
+            val dx = maxOf(c.left - x, x - c.right, 0f)
+            val dy = maxOf(c.top - y, y - c.bottom, 0f)
+            val d2 = dx * dx + dy * dy
+            if (d2 < bestDist) { bestDist = d2; best = h }
+        }
+        val snap = best ?: return
+        val snapPos = snap.bindingAdapterPosition
+        var snapEnd = snapPos + 1
+        while (snapEnd < adapter.rows.size && adapter.rows[snapEnd] is Row.Card) snapEnd++
+        val to = if (y < (snap.itemView.top + snap.itemView.bottom) / 2f) snapPos else snapEnd
+        var selfEnd = fromPos + 1
+        while (selfEnd < adapter.rows.size && adapter.rows[selfEnd] is Row.Card) selfEnd++
+        val firstGroup = adapter.rows.indexOfFirst { (it as? Row.Header)?.section == Section.GROUP }
+        val otherIdx = adapter.rows.indexOfFirst { (it as? Row.Header)?.section == Section.OTHER }
+        val maxTo = if (otherIdx >= 0) otherIdx else adapter.rows.size
+        val clamped = to.coerceIn(firstGroup.coerceAtLeast(0), maxTo)
+        if (clamped in fromPos..selfEnd) return          // own span (before me / after my block) = no-op
+        val block = adapter.rows.subList(fromPos, selfEnd).toList()
+        val copy = adapter.rows.toMutableList()
+        copy.subList(fromPos, selfEnd).clear()
+        val adj = (if (clamped > fromPos) clamped - block.size else clamped).coerceIn(0, copy.size)
+        copy.addAll(adj, block)
+        val ids = copy.mapNotNull { r -> (r as? Row.Header)?.takeIf { it.section == Section.GROUP }?.group?.id }
+        core.tabs.applyGroupOrder(sid, ids)
+    }
+
     private val touchHelper = ItemTouchHelper(object : ItemTouchHelper.Callback() {
         override fun getMovementFlags(rv: RecyclerView, vh: RecyclerView.ViewHolder): Int {
-            if (vh !is CardVH || selectionMode) return 0
+            if (selectionMode) return 0
+            if (vh is HeaderVH) {
+                val row = adapter.rows.getOrNull(vh.bindingAdapterPosition) as? Row.Header ?: return 0
+                // v2.1.10: only GROUP headers drag (they carry their block); PINNED/OTHER are fixed anchors.
+                return if (row.section == Section.GROUP) makeMovementFlags(ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0) else 0
+            }
+            if (vh !is CardVH) return 0
             val card = adapter.rows.getOrNull(vh.bindingAdapterPosition) as? Row.Card
             // v2.1.7 (issue O): swipe-to-close, but never for a pinned tab - those must not vanish by accident.
             val swipe = if (card?.tab?.pinned == true) 0 else ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT
@@ -307,21 +462,12 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
         }
         override fun isLongPressDragEnabled() = !selectionMode
         override fun isItemViewSwipeEnabled() = !selectionMode
-        override fun onMove(rv: RecyclerView, from: RecyclerView.ViewHolder, to: RecyclerView.ViewHolder): Boolean {
-            // Any reorder cancels the pending hold: the user is moving, not resting on a tab.
-            cancelHoldTimer(); clearGroupTarget()
-            val f = from.bindingAdapterPosition; val t = to.bindingAdapterPosition
-            if (f == RecyclerView.NO_POSITION || t == RecyclerView.NO_POSITION) return false
-            if (t == 0 && adapter.rows[0] is Row.Header) return false   // nothing above the first header
-            val card = adapter.rows[f] as? Row.Card ?: return false
-            val copy = adapter.rows.toMutableList(); copy.add(t, copy.removeAt(f))
-            val targetSection = sectionAt(copy, t)
-            if ((targetSection == Section.PINNED) != card.tab.pinned) return false   // pinned stays pinned, normal stays normal
-            adapter.move(f, t); return true
-        }
+        // v2.1.10 (Chrome-style): the grid never reflows mid-drag - the dragged view just follows the
+        // finger, and clearView decides group vs reorder from where the finger was released.
+        override fun onMove(rv: RecyclerView, from: RecyclerView.ViewHolder, to: RecyclerView.ViewHolder) = false
         override fun onSwiped(vh: RecyclerView.ViewHolder, direction: Int) {
             val card = adapter.rows.getOrNull(vh.bindingAdapterPosition) as? Row.Card
-            cancelHoldTimer(); clearGroupTarget(); dragHolder = null; fingerSeen = false
+            clearDropTarget(); dragHolder = null; draggedRow = null
             // v2.1.7 (issue O): a swipe closes the tab immediately and offers Undo - no dialog, the
             // gesture itself is the confirmation (Chrome/Firefox Android behave the same).
             if (card != null) {
@@ -333,20 +479,32 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
         override fun clearView(rv: RecyclerView, vh: RecyclerView.ViewHolder) {
             super.clearView(rv, vh)
             vh.itemView.alpha = 1f; vh.itemView.scaleX = 1f; vh.itemView.scaleY = 1f
+            if (dragHolder !== vh) return   // swipe recovery / idle clear: no drop to dispatch
             val pos = vh.bindingAdapterPosition
-            val draggedId = if (pos == RecyclerView.NO_POSITION) null else (adapter.rows.getOrNull(pos) as? Row.Card)?.tab?.id
+            val row = if (pos == RecyclerView.NO_POSITION) null else adapter.rows.getOrNull(pos)
             val targetId = groupTargetId
-            cancelHoldTimer(); clearGroupTarget(); dragHolder = null; fingerSeen = false
+            val targetHeader = headerTarget
+            val fx = fingerX
+            val fy = fingerY
+            clearDropTarget(); dragHolder = null; draggedRow = null
+            // The dragged view keeps its layout slot (only the draw is offset), so a finger still
+            // inside its original bounds = released in place (long-press without moving): no drop,
+            // no neighbour shift.
+            val own = vh.itemView
+            val inPlace = fx >= own.left && fx <= own.right && fy >= own.top && fy <= own.bottom
             when {
-                targetId != null && draggedId != null && draggedId != targetId -> groupByDrag(draggedId, targetId)
-                adapter.dirty -> { adapter.dirty = false; commitOrder() }
+                row is Row.Card && targetId != null && targetId != row.tab.id -> groupByDrag(row.tab.id, targetId)
+                row is Row.Card && targetHeader != null -> dropCardOnHeader(row.tab.id, targetHeader)
+                row is Row.Card && !inPlace -> dropCardReorder(row.tab.id, fx, fy, own)
+                row is Row.Header && !inPlace -> dropHeader(pos, fx, fy)
             }
         }
         override fun onSelectedChanged(vh: RecyclerView.ViewHolder?, actionState: Int) {
             super.onSelectedChanged(vh, actionState)
             if (actionState == ItemTouchHelper.ACTION_STATE_DRAG) {
-                dragHolder = vh; fingerSeen = false
-                clearGroupTarget(); resetHoldTimer()
+                dragHolder = vh
+                draggedRow = vh?.let { adapter.rows.getOrNull(it.bindingAdapterPosition) }
+                clearDropTarget()
                 vh?.itemView?.apply { alpha = 0.9f; scaleX = 1.04f; scaleY = 1.04f }
             }
         }
@@ -566,12 +724,10 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
 
     private inner class Adapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         val rows = mutableListOf<Row>()
-        var dirty = false
 
         init { setHasStableIds(true) }
 
         fun submit(list: List<Row>) { rows.clear(); rows.addAll(list); notifyDataSetChanged() }
-        fun move(from: Int, to: Int) { rows.add(to, rows.removeAt(from)); notifyItemMoved(from, to); dirty = true }
         fun refreshTab(tab: Tab) { val i = rows.indexOfFirst { it is Row.Card && it.tab.id == tab.id }; if (i >= 0) notifyItemChanged(i) }
 
         override fun getItemId(position: Int): Long = rows[position].key.hashCode().toLong()
@@ -670,7 +826,5 @@ class TabsSheet : BottomSheetDialogFragment(), TabManager.Listener {
 
     private companion object {
         const val ID_GROUP_ARCHIVE = 9101
-        /** v2.1.7 (issue P): how long the finger must rest on another tab before a release groups them. */
-        const val HOLD_GROUP_MS = 600L
     }
 }

@@ -168,6 +168,24 @@ class TabManager(private val core: BrowserCore) {
         notifyTabsChanged(sessionId)
     }
 
+    /**
+     * v2.1.10 (A9): group headers reordered by a grid drag. [orderedIds] must list every group of
+     * the session exactly once, top to bottom; positions are rewritten and persisted atomically
+     * (mirrors moveGroup - the tabs themselves keep their membership and positions inside groups).
+     */
+    fun applyGroupOrder(sessionId: String, orderedIds: List<String>) {
+        val list = groupsFor(sessionId)
+        if (orderedIds.size != list.size || orderedIds.toSet() != list.map { it.id }.toSet()) {
+            AppLog.w(TAG, "applyGroupOrder ignored: ids do not match session groups"); return
+        }
+        val byId = list.associateBy { it.id }
+        orderedIds.forEachIndexed { i, id -> byId.getValue(id).position = i }
+        core.persist { core.repo.tabGroups.upsertAll(list.map { it.toEntity() }) }
+        normalizeOrder(sessionId)
+        persistSession(sessionId)
+        notifyTabsChanged(sessionId)
+    }
+
     /** Puts [tabId] into [groupId] (null = ungroup). The tab moves to the end of its new group. */
     fun setTabGroup(tabId: String, groupId: String?) = setTabsGroup(listOf(tabId), groupId)
 
