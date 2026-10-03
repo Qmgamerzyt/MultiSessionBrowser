@@ -565,14 +565,14 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
                 ptrDetail = null
                 val gesture = ptrGesture
                 gv.onTouchEventForDetailResult(ev).accept({ d ->
-                    if (gesture == ptrGesture) {
+                    if (d != null && gesture == ptrGesture) {
                         ptrDetail = d
                         ptrDetailGesture = gesture
                         AppLog.d("PTR", "gesture=$gesture handled=${d.handledResult()} " +
                             "scrollable=${d.scrollableDirections()} overscroll=${d.overscrollDirections()}")
                     }
                 }, { AppLog.d("PTR", "detail failed: $it") })
-                return true // dispatched by onTouchEventForDetailResult (equivalent to onTouchEvent)
+                return@OnTouchListener true // dispatched by onTouchEventForDetailResult (equivalent to onTouchEvent)
             }
         }
         false // otherwise never consume: the GeckoView handles the event normally
