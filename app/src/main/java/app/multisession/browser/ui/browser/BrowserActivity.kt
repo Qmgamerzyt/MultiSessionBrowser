@@ -70,6 +70,7 @@ import app.multisession.browser.permissions.PermissionValue
 import app.multisession.browser.session.IncognitoNotifier
 import app.multisession.browser.permissions.SitePermissionStore
 import app.multisession.browser.permissions.SitePermissionType
+import app.multisession.browser.projects.editor.EditorActivity
 import app.multisession.browser.tabs.PageError
 import app.multisession.browser.tabs.Tab
 import app.multisession.browser.tabs.TabManager
@@ -275,6 +276,12 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         intent.putExtra(EXTRA_HANDLED, true)
         // Tap on a website notification: bring the browser up and report the click to the page.
         intent.getStringExtra(WebNotifications.EXTRA_TAG)?.let { tag -> core.engine.notifications.click(tag); return }
+        // Library/editor screens deliver a URL to open (the SimpleListActivity result contract,
+        // also sent by intent in v2.1.10 Plan 3 so the editor preview stays on the back stack).
+        intent.getStringExtra(SimpleListActivity.EXTRA_OPEN_URL)?.let { url ->
+            openUrl(url, intent.getBooleanExtra(SimpleListActivity.EXTRA_IN_NEW_TAB, false))
+            return
+        }
         val data = intent.data ?: return
         if (intent.action == Intent.ACTION_VIEW && UrlUtils.isWebUrl(data.toString())) {
             openUrl(data.toString(), newTab = true)
@@ -1140,6 +1147,16 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
             entry(R.drawable.ic_extension, R.string.ext_amo_install_page) { installAmoFromPage(slug) }
         }
         entry(R.drawable.ic_folder, R.string.local_projects) { openUrlLauncher.launch(Intent(this, ProjectsActivity::class.java)) }
+        // v2.1.10 (Plan 3): edit the project that owns the current file:// page.
+        tab?.url?.let { u -> core.projects.locate(u)?.let { loc ->
+            entry(R.drawable.ic_code, R.string.edit_project) {
+                startActivity(
+                    Intent(this, EditorActivity::class.java)
+                        .putExtra(EditorActivity.EXTRA_PROJECT_ID, loc.project.id)
+                        .putExtra(EditorActivity.EXTRA_FILE, loc.relPath.ifBlank { loc.project.entry })
+                )
+            }
+        } }
         entry(R.drawable.ic_delete, R.string.clear_site_data) { confirmClearSessionData() }
         entry(R.drawable.ic_tune, R.string.settings) { startActivity(Intent(this, SettingsActivity::class.java)) }
         val title = session?.name ?: getString(R.string.menu_app)

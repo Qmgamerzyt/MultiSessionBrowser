@@ -14,6 +14,7 @@ import androidx.lifecycle.lifecycleScope
 import app.multisession.browser.R
 import app.multisession.browser.core.AppLog
 import app.multisession.browser.projects.ProjectManager
+import app.multisession.browser.projects.editor.EditorActivity
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.launch
@@ -62,11 +63,12 @@ class ProjectsActivity : SimpleListActivity() {
     }
 
     private fun showProjectMenu(p: ProjectManager.Project) {
-        val actions = arrayOf(getString(R.string.open_in_new_tab), getString(R.string.export_zip), getString(R.string.delete))
+        val actions = arrayOf(getString(R.string.edit), getString(R.string.open_in_new_tab), getString(R.string.export_zip), getString(R.string.delete))
         MaterialAlertDialogBuilder(this).setTitle(p.name).setItems(actions) { _, which ->
             when (which) {
-                0 -> returnUrl(p.url, newTab = true)
-                1 -> lifecycleScope.launch {
+                0 -> startActivity(Intent(this, EditorActivity::class.java).putExtra(EditorActivity.EXTRA_PROJECT_ID, p.id))
+                1 -> returnUrl(p.url, newTab = true)
+                2 -> lifecycleScope.launch {
                     try {
                         val file = core.projects.exportZip(p)
                         val uri = FileProvider.getUriForFile(this@ProjectsActivity, "$packageName.fileprovider", file)
@@ -79,7 +81,7 @@ class ProjectsActivity : SimpleListActivity() {
                         Snackbar.make(recycler, R.string.export_failed, Snackbar.LENGTH_LONG).show()
                     }
                 }
-                2 -> MaterialAlertDialogBuilder(this).setTitle(R.string.delete).setMessage(getString(R.string.delete_project_confirm, p.name))
+                3 -> MaterialAlertDialogBuilder(this).setTitle(R.string.delete).setMessage(getString(R.string.delete_project_confirm, p.name))
                     .setPositiveButton(R.string.delete) { _, _ -> lifecycleScope.launch { core.projects.delete(p); refresh() } }
                     .setNegativeButton(android.R.string.cancel, null).show()
             }
@@ -119,7 +121,11 @@ class ProjectsActivity : SimpleListActivity() {
                 lifecycleScope.launch {
                     val p = core.projects.createFromHtml(name.text.toString(), html.text.toString())
                     refresh()
-                    returnUrl(p.url, newTab = true)
+                    startActivity(
+                        Intent(this@ProjectsActivity, EditorActivity::class.java)
+                            .putExtra(EditorActivity.EXTRA_PROJECT_ID, p.id)
+                            .putExtra(EditorActivity.EXTRA_FILE, "index.html")
+                    )
                 }
             }
             .setNegativeButton(android.R.string.cancel, null)

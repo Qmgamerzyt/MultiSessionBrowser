@@ -33,6 +33,25 @@ class ProjectManager(private val context: Context, private val localContent: Loc
 
     fun get(id: String): Project? = File(root, id).takeIf { it.isDirectory }?.let { load(it) }
 
+    /** The project whose folder contains [url], plus the file path relative to that folder ("" = the folder itself). */
+    data class Located(val project: Project, val relPath: String)
+
+    fun locate(url: String): Located? {
+        if (!url.startsWith("file://")) return null
+        val path = Uri.parse(url).path ?: return null
+        return try {
+            val prefix = root.canonicalPath + File.separator
+            if (!path.startsWith(prefix)) return null
+            val rest = path.removePrefix(prefix)
+            val id = rest.substringBefore('/')
+            if (id.isEmpty()) return null
+            val p = get(id) ?: return null
+            Located(p, rest.removePrefix(id).removePrefix("/"))
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
     suspend fun importZip(uri: Uri, name: String): Project = withContext(Dispatchers.IO) {
         val dir = newDir()
         try {

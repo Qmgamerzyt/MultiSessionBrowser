@@ -238,4 +238,5 @@
     <string name="editor_rename">Rename</string>
     <string name="editor_find">Find in file</string>
     <string name="editor_op_failed">Could not update the project</string>
+    <string name="edit_project">Edit project</string>
 </resources>
