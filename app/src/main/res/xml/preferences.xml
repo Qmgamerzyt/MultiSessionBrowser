@@ -125,4 +125,11 @@
             android:title="@string/webrtc_note"
             android:summary="Exposes audio output devices to sites and enables full-duplex audio in every UA mode. Takes effect after the app is restarted." />
     </PreferenceCategory>
+    <PreferenceCategory android:title="Diagnostics">
+        <SwitchPreferenceCompat
+            android:key="console_log"
+            android:defaultValue="false"
+            android:title="Web console to logcat"
+            android:summary="Routes page console messages (JS errors, CSP violations, unhandled exceptions) to logcat while browsing. Always on in debug builds; small cost on message-heavy pages." />
+    </PreferenceCategory>
 </PreferenceScreen>

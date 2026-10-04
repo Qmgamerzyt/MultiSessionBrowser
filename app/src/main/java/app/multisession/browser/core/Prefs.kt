@@ -30,6 +30,8 @@ object Prefs {
     const val KEY_ACTIVE_SESSION = "active_session_id"
     const val KEY_WEBRTC_COMPAT = "webrtc_compat"
     const val KEY_IDLE_HIBERNATE = "idle_hibernate_minutes"
+    /** Web console messages -> logcat (site diagnostics; always on in debug builds). */
+    const val KEY_CONSOLE_LOG = "console_log"
 
     private const val DDG = "https://duckduckgo.com/?q=%s"
 
@@ -59,6 +61,7 @@ object Prefs {
     val askBeforeDownload: Boolean get() = sp.getBoolean(KEY_ASK_DOWNLOAD, true)
     val mediaAutoplay: Boolean get() = sp.getBoolean(KEY_AUTOPLAY, false)
     val zoomEnabled: Boolean get() = sp.getBoolean(KEY_ZOOM, true)
+    val consoleLog: Boolean get() = sp.getBoolean(KEY_CONSOLE_LOG, false)
 
     /**
      * Global default page scale in percent (50..200, 100 = no scaling). Hard-coded here rather than

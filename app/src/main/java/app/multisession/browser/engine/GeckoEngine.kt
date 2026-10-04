@@ -65,7 +65,10 @@ class GeckoEngine(private val app: Application) {
         val builder = GeckoRuntimeSettings.Builder()
             .javaScriptEnabled(Prefs.javaScriptEnabled)
             .remoteDebuggingEnabled(BuildConfig.DEBUG)   // about:debugging / DevTools over USB in debug builds only
-            .consoleOutput(BuildConfig.DEBUG)             // web console -> logcat in debug builds only
+            // Web console -> logcat: always in debug builds, opt-in via Settings -> Diagnostics in
+            // release (v2.1.10: capturing a site's CSP/JS errors is how Plan 2 diagnoses quest-claim
+            // and other page-policy failures that are invisible otherwise).
+            .consoleOutput(BuildConfig.DEBUG || Prefs.consoleLog)
             .aboutConfigEnabled(BuildConfig.DEBUG)
             .preferredColorScheme(colorScheme())
             .forceUserScalableEnabled(Prefs.zoomEnabled)
@@ -129,6 +132,7 @@ class GeckoEngine(private val app: Application) {
         s.javaScriptEnabled = Prefs.javaScriptEnabled
         s.forceUserScalableEnabled = Prefs.zoomEnabled
         s.preferredColorScheme = colorScheme()
+        s.consoleOutputEnabled = BuildConfig.DEBUG || Prefs.consoleLog
         s.contentBlocking.setSafeBrowsing(safeBrowsing())
         s.contentBlocking.setCookieBehavior(cookieBehavior())
         writeConfigFile()   // takes effect at the next process start (Gecko reads it once)
