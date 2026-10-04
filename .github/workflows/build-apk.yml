@@ -47,7 +47,11 @@ jobs:
             TAG="${GITHUB_REF#refs/tags/v}"
             if [ "$TAG" != "$VN" ]; then echo "::error::Tag v$TAG does not match versionName $VN in app/build.gradle.kts"; exit 1; fi
           fi
-          if grep -rq "android.webkit.WebView" app/src/main/java; then echo "::error::WebView reference found - engine must stay GeckoView"; exit 1; fi
+          # Browsing engine must stay GeckoView: no android.webkit.WebView outside the in-app
+          # project editor host (spec 2026-10-04 Q5 - it renders only bundled assets via
+          # file:///android_asset/editor/ with a strict URL allowlist, and never loads web content).
+          WV=$(grep -rl "android.webkit.WebView" app/src/main/java 2>/dev/null | grep -v "/projects/editor/" || true)
+          if [ -n "$WV" ]; then echo "::error::WebView reference found outside projects/editor - browsing engine must stay GeckoView ($WV)"; exit 1; fi
           echo "version_name=$VN" >> "$GITHUB_OUTPUT"
           echo "version_code=$VC" >> "$GITHUB_OUTPUT"
 
