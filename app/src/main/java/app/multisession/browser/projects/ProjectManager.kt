@@ -40,9 +40,12 @@ class ProjectManager(private val context: Context, private val localContent: Loc
         if (!url.startsWith("file://")) return null
         val path = Uri.parse(url).path ?: return null
         return try {
+            // Canonicalize BOTH sides like LocalContentLoader.isAllowedLocalUri: raw-vs-canonical
+            // prefix tests go dead on devices where filesDir is symlinked (/data/user/0 -> /data/data).
             val prefix = root.canonicalPath + File.separator
-            if (!path.startsWith(prefix)) return null
-            val rest = path.removePrefix(prefix)
+            val cpath = File(path).canonicalPath
+            if (!cpath.startsWith(prefix)) return null
+            val rest = cpath.removePrefix(prefix)
             val id = rest.substringBefore('/')
             if (id.isEmpty()) return null
             val p = get(id) ?: return null
