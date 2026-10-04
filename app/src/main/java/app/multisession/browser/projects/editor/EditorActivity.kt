@@ -109,7 +109,8 @@ class EditorActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        webView.destroy()
+        // onCreate can finish() before webView is bound (unknown project id) - guard the lateinit.
+        if (::webView.isInitialized) webView.destroy()
         super.onDestroy()
     }
 
