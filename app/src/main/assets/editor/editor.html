@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor</title>
+<link rel="stylesheet" href="codemirror.min.css">
+<link rel="stylesheet" href="material-darker.min.css">
+<link rel="stylesheet" href="dialog.css">
+<style>
+  html, body { height: 100%; margin: 0; background: #1e1e1e; }
+  #editor, .CodeMirror { height: 100%; font-size: 14px; }
+  #empty { display: none; padding: 24px; font: 14px sans-serif; color: #9e9e9e; }
+</style>
+</head>
+<body>
+<div id="editor"></div>
+<div id="empty"></div>
+<script src="codemirror.min.js"></script>
+<script src="mode/xml/xml.min.js"></script>
+<script src="mode/javascript/javascript.min.js"></script>
+<script src="mode/css/css.min.js"></script>
+<script src="mode/htmlmixed/htmlmixed.min.js"></script>
+<script src="addon/dialog/dialog.min.js"></script>
+<script src="addon/search/searchcursor.min.js"></script>
+<script src="addon/search/search.min.js"></script>
+<script>
+"use strict";
+var Bridge = window.Bridge;
+var applying = false;
+var current = null;
+var dirty = false;
+var timer = null;
+var cm = CodeMirror(document.getElementById("editor"), {
+  lineNumbers: true,
+  theme: "material-darker",
+  indentUnit: 2,
+  extraKeys: { "Ctrl-F": "findPersistent", "Cmd-F": "findPersistent" }
+});
+
+function modeFor(path) {
+  if (/\.html?$/.test(path)) return "htmlmixed";
+  if (/\.(js|mjs)$/.test(path)) return "javascript";
+  if (/\.css$/.test(path)) return "css";
+  if (/\.(xml|svg)$/.test(path)) return "xml";
+  if (/\.json$/.test(path)) return "javascript";
+  return "text/plain";
+}
+
+function setDirty(d) {
+  if (d === dirty) return;
+  dirty = d;
+  Bridge.onDirty(d);
+}
+
+// Synchronous flush: called from the change-debounce AND from Kotlin before
+// preview/back/file-switch (evaluateJavascript runs it to completion first).
+function flushSave() {
+  if (timer !== null) { clearTimeout(timer); timer = null; }
+  if (current !== null && dirty) {
+    Bridge.save(current, cm.getValue());
+    // Failure already toasted by the bridge; clear dirty so a broken disk
+    // does not re-toast on every flush. The next keystroke re-arms autosave.
+    setDirty(false);
+  }
+}
+
+function scheduleSave() {
+  if (timer !== null) clearTimeout(timer);
+  timer = setTimeout(function () { timer = null; flushSave(); }, 800);
+}
+
+cm.on("change", function () {
+  if (applying || current === null) return;
+  setDirty(true);
+  scheduleSave();
+});
+
+function loadFile(path) {
+  flushSave();
+  var res = JSON.parse(Bridge.openPath(path));
+  var empty = document.getElementById("empty");
+  if (!res.ok) {
+    applying = true;
+    current = null;
+    cm.setValue("");
+    cm.clearHistory();
+    applying = false;
+    empty.textContent = res.error;
+    empty.style.display = "block";
+    return;
+  }
+  empty.style.display = "none";
+  current = path;
+  applying = true;
+  cm.setOption("mode", modeFor(path));
+  cm.setValue(res.content);
+  cm.clearHistory();
+  applying = false;
+  setDirty(false);
+  cm.focus();
+}
+
+// Called from Kotlin (evaluateJavascript):
+window.loadFile = function (path) { loadFile(path); };
+window.flushSave = function () { flushSave(); };
+window.find = function () { cm.execCommand("findPersistent"); };
+</script>
+</body>
+</html>
