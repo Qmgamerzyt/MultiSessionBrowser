@@ -636,7 +636,7 @@ package app.multisession.browser.projects.editor
 
 import android.content.Intent
 import android.os.Bundle
-import android.view.GravityCompat
+import androidx.core.view.GravityCompat
 import android.view.LayoutInflater
 import android.view.Menu
 import android.view.MenuItem
