@@ -225,4 +225,10 @@
     <string name="perm_drm_msg">This site wants to play protected (DRM) content.</string>
     <string name="perm_generic_msg">This site is asking for: %1$s.</string>
     <string name="perm_change_hint">Your choice is remembered for this site in this session. Change it any time via Site permissions.</string>
+
+    <!-- v2.1.10 (Plan 3): in-app project editor -->
+    <string name="editor_binary">Not an editable text file</string>
+    <string name="editor_too_large">File is larger than 2 MB</string>
+    <string name="editor_bad_path">Invalid file path</string>
+    <string name="editor_save_failed">Could not save the file</string>
 </resources>
