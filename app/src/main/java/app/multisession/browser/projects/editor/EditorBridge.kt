@@ -77,7 +77,7 @@ class EditorBridge(
     fun open(rel: String): JSONObject {
         val f = resolve(rel)
         if (f == null || !f.isFile) return err(appContext.getString(R.string.editor_bad_path))
-        if (rel.substringAfterLast('/') == readOnly) {
+        if (f.name == readOnly) {
             // Our own metadata: viewable but never saved through the editor.
             return try {
                 JSONObject().put("ok", true).put("content", f.readText())
@@ -85,7 +85,7 @@ class EditorBridge(
                 err(appContext.getString(R.string.editor_binary))
             }
         }
-        if (!editable(rel)) return err(appContext.getString(R.string.editor_binary))
+        if (!editable(f.name)) return err(appContext.getString(R.string.editor_binary))
         if (f.length() > maxBytes) return err(appContext.getString(R.string.editor_too_large))
         return try {
             val text = Charsets.UTF_8.newDecoder()
@@ -101,7 +101,7 @@ class EditorBridge(
     /** New empty file; the parent directory must already exist (spec). */
     fun create(rel: String): Boolean {
         val f = resolve(rel) ?: return false
-        if (f.exists() || !editable(rel)) return false
+        if (f.exists() || !editable(f.name)) return false
         val parent = f.parentFile ?: return false
         if (!parent.isDirectory) return false
         return try {
@@ -114,15 +114,16 @@ class EditorBridge(
     fun rename(from: String, to: String): Boolean {
         val a = resolve(from) ?: return false
         val b = resolve(to) ?: return false
-        if (!a.isFile || !editable(from) || !editable(to) || b.exists()) return false
+        if (!a.isFile || !editable(a.name) || !editable(b.name) || b.exists()) return false
         val parent = b.parentFile ?: return false
         if (!parent.isDirectory) return false
         return a.renameTo(b)
     }
 
     fun delete(rel: String): Boolean {
-        if (rel.substringAfterLast('/') == readOnly) return false
         val f = resolve(rel) ?: return false
+        // Key off the CANONICAL name: raw-string checks are bypassable via "project.json/." etc.
+        if (f.name == readOnly) return false
         return f.isFile && f.delete()
     }
 
@@ -145,7 +146,7 @@ class EditorBridge(
     @JavascriptInterface
     fun save(rel: String, content: String): String {
         val f = resolve(rel)
-        if (f == null || !f.isFile || !editable(rel)) {
+        if (f == null || !f.isFile || !editable(f.name)) {
             postToast(appContext.getString(R.string.editor_save_failed))
             return "err"
         }
