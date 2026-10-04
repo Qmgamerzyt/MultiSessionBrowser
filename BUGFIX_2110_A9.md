@@ -46,7 +46,10 @@ state is the same `InputResultDetail` the android-components
 
 Arming semantics, non-inner cases, and the horizontal/double-scroll guards are unchanged: same
 arm rules, only the *release* decision learned to ask Gecko.
-
+---
+Result:
+yes it is now fixed and good.
+--
 ## A9‑2 — Gray check circle on selected tab cards (A4)
 
 ### Root cause
@@ -63,7 +66,10 @@ inflated as a no-op and `MaterialCardViewHelper` kept drawing its default dark-g
 explicitly maps `null` to `CHECKED_ICON_NONE`, so no icon is drawn in any state. The XML comment
 sits **above the element** (XML attributes are not allowed to carry comments). No other layout in
 `res/` referenced `checkedIconVisible`.
-
+---
+Result:
+fixed
+--
 ## A9‑3 — Extension popup drags its own sheet while touching content
 
 ### Root cause
@@ -78,7 +84,10 @@ input field) could grab the sheet and drag it down — the popup could not be us
 `enablePopupTitleDrag(sheet, popupTitle)` (:1399) restores exactly one drag affordance: a
 **translate gesture on the title bar** (the standard grab handle), with the usual 120 dp
 dismiss threshold and a 150 ms snap-back. Content touches never move the sheet anymore.
-
+---
+Result:
+fixed
+--
 ## A9‑4 — Download notification actions
 
 ### Root cause
@@ -107,7 +116,10 @@ Three gaps in the v2.1.7 notification flow:
 * Strings: `dl_close` in the new `values/strings_v2110.xml` (existing
   `dl_pause/dl_resume/dl_cancel/dl_open` reused; drawables `ic_pause/ic_play/ic_close/
   ic_open_in_new` exist).
-
+---
+Result:
+Fixed
+--
 ## A9‑5 — Tabs grid: Chrome-style drop-to-group and group-header drag
 
 ### Root cause
@@ -148,7 +160,10 @@ problems worse to hit.
   (`dragHolder !== vh`), and `onSwiped` cleans state and closes the tab as before.
 * Card-stroke highlight is restored through `refreshTab` (a plain `strokeWidth = 0` would erase
   the current-tab stroke `bind()` applies). Header highlight = alpha 0.55.
-
+---
+Result:
+fixed but stuck sometimes, sometimes it never does it
+--
 ---
 
 ## Validation performed
