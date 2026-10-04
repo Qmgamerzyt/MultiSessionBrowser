@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item android:id="@+id/action_new_file" android:icon="@drawable/ic_add" android:title="@string/editor_new_file" app:showAsAction="always" />
+    <item android:id="@+id/action_find" android:icon="@drawable/ic_search" android:title="@string/editor_find" app:showAsAction="always" />
+    <item android:id="@+id/action_preview" android:icon="@drawable/ic_open_in_new" android:title="@string/editor_preview" app:showAsAction="ifRoom" />
+</menu>

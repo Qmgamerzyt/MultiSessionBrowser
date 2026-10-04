@@ -231,4 +231,11 @@
     <string name="editor_too_large">File is larger than 2 MB</string>
     <string name="editor_bad_path">Invalid file path</string>
     <string name="editor_save_failed">Could not save the file</string>
+    <string name="edit">Edit</string>
+    <string name="editor_preview">Preview</string>
+    <string name="editor_new_file">New file</string>
+    <string name="editor_new_file_hint">Path inside the project, e.g. style.css</string>
+    <string name="editor_rename">Rename</string>
+    <string name="editor_find">Find in file</string>
+    <string name="editor_op_failed">Could not update the project</string>
 </resources>
