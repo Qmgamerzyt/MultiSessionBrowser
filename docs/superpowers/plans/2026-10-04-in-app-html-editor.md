@@ -995,9 +995,12 @@ Insert after the `fun get(id: String): Project? = ...` line:
         if (!url.startsWith("file://")) return null
         val path = Uri.parse(url).path ?: return null
         return try {
+            // Canonicalize BOTH sides like LocalContentLoader.isAllowedLocalUri: raw-vs-canonical
+            // prefix tests go dead on devices where filesDir is symlinked (/data/user/0 -> /data/data).
             val prefix = root.canonicalPath + File.separator
-            if (!path.startsWith(prefix)) return null
-            val rest = path.removePrefix(prefix)
+            val cpath = File(path).canonicalPath
+            if (!cpath.startsWith(prefix)) return null
+            val rest = cpath.removePrefix(prefix)
             val id = rest.substringBefore('/')
             if (id.isEmpty()) return null
             val p = get(id) ?: return null
@@ -1094,7 +1097,7 @@ python3 -c "import xml.etree.ElementTree as ET; ET.parse('app/src/main/res/value
 grep -n "fun locate" app/src/main/java/app/multisession/browser/projects/ProjectManager.kt
 grep -n "edit_project" app/src/main/java/app/multisession/browser/ui/browser/BrowserActivity.kt app/src/main/res/values/strings.xml
 grep -n "EXTRA_OPEN_URL" app/src/main/java/app/multisession/browser/ui/browser/BrowserActivity.kt   # :215 result + new handleIntent hit
-grep -n "R.string.edit," app/src/main/java/app/multisession/browser/ui/library/ProjectsActivity.kt
+grep -n "R.string.edit)" app/src/main/java/app/multisession/browser/ui/library/ProjectsActivity.kt  # arrayOf(getString(R.string.edit), ...)
 ```
 Expected: all `OK` / `XML OK` / one hit each; `BrowserActivity` `EXTRA_OPEN_URL` now appears twice.
 
