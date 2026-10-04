@@ -198,7 +198,7 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
     override fun onTitleChange(session: GeckoSession, title: String?) {
         if (!title.isNullOrBlank() && title != tab.title) {
             tab.title = title
-            core.tabs.persistTab(tab)
+            core.tabs.persistTitle(tab)
             core.tabs.notifyTabUpdated(tab)
         }
     }

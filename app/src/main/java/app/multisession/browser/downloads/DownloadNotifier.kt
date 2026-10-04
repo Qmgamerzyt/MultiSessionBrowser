@@ -58,19 +58,25 @@ object DownloadNotifier {
     /** Called by [AppDownloadManager] for every state/progress change. Safe from any thread. */
     fun onDownloadChanged(context: Context, d: DownloadEntity) {
         val app = context.applicationContext
-        if (!canPost(app)) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ensureChannels(app)
-        val manager = NotificationManagerCompat.from(app)
-        val id = d.id.hashCode()
+        // v2.1.10 (perf): the stall check runs BEFORE the permission/channel binder calls - a
+        // progress tick that would not be sent must cost nothing (the checks used to run on every
+        // ~300 ms callback even when the percentage had not moved within the last second).
+        val percent =
+            if (d.status == DownloadStatus.RUNNING && d.totalBytes > 0)
+                ((d.downloadedBytes * 100) / d.totalBytes).toInt().coerceIn(0, 100)
+            else -1
         if (d.status == DownloadStatus.RUNNING) {
-            val percent = if (d.totalBytes > 0) ((d.downloadedBytes * 100) / d.totalBytes).toInt().coerceIn(0, 100) else -1
             val now = System.currentTimeMillis()
             val prev = lastSent[d.id]
             if (prev != null && prev.first == percent && now - prev.second < 1000L) return
-            lastSent[d.id] = percent to now
         } else if (DownloadStatus.isFinished(d.status)) {
             lastSent.remove(d.id)
         }
+        if (!canPost(app)) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ensureChannels(app)
+        if (d.status == DownloadStatus.RUNNING) lastSent[d.id] = percent to System.currentTimeMillis()
+        val manager = NotificationManagerCompat.from(app)
+        val id = d.id.hashCode()
         when (d.status) {
             DownloadStatus.PENDING, DownloadStatus.RUNNING ->
                 manager.notify(id, active(app, d, ongoing = true))
@@ -172,7 +178,13 @@ object DownloadNotifier {
         return NotificationManagerCompat.from(context).areNotificationsEnabled()
     }
 
+    /** True once both channels were probed in this process: getNotificationChannel is a binder call,
+     *  and it used to run on every progress tick. (Deleting a channel in system settings while the
+     *  app runs only loses notifications the user has already opted out of.) */
+    @Volatile private var channelsReady = false
+
     private fun ensureChannels(context: Context) {
+        if (channelsReady) return
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         if (nm.getNotificationChannel(CHANNEL_ACTIVE) == null) {
             val c = NotificationChannel(CHANNEL_ACTIVE, context.getString(R.string.dl_channel_progress), NotificationManager.IMPORTANCE_LOW)
@@ -184,6 +196,7 @@ object DownloadNotifier {
             c.description = context.getString(R.string.dl_channel_done_desc)
             nm.createNotificationChannel(c)
         }
+        channelsReady = true
     }
 
     private fun openDownloads(context: Context): PendingIntent =

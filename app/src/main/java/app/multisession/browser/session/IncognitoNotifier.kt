@@ -36,14 +36,23 @@ object IncognitoNotifier {
     private const val NOTIFICATION_ID = 0x1C0
     private const val RC_CLOSE = 0x1C1
 
+    /** Session id whose notification is currently posted (null = none). Main-thread only.
+     *  v2.1.10 (perf): the active-session flow emits on every session touch, and every emission used
+     *  to cost a cancel binder call (non-private, the common case) or a full rebuild + notify. */
+    private var postedForId: String? = null
+
     /** Shows or hides the notification for the current active session. */
     fun update(context: Context, active: SessionEntity?) {
         val app = context.applicationContext
-        val manager = NotificationManagerCompat.from(app)
         if (active?.isPrivate != true) {
-            manager.cancel(NOTIFICATION_ID)
+            if (postedForId == null) return   // nothing was ever posted: skip the cancel IPC
+            postedForId = null
+            NotificationManagerCompat.from(app).cancel(NOTIFICATION_ID)
             return
         }
+        // Already handled for this session (content only depends on the id). A swipe-dismiss is
+        // accepted: this is an advisory notification, it re-appears on the next session change.
+        if (postedForId == active.id) return
         if (!canPost(app)) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ensureChannel(app)
         val builder = NotificationCompat.Builder(app, CHANNEL_ID)
@@ -56,12 +65,15 @@ object IncognitoNotifier {
             .setOngoing(false)
             .setAutoCancel(false)
         appOpenIntent(app)?.let { builder.setContentIntent(it) }
-        manager.notify(NOTIFICATION_ID, builder.build())
+        NotificationManagerCompat.from(app).notify(NOTIFICATION_ID, builder.build())
+        postedForId = active.id
     }
 
     /** Hides it immediately (Activity leaving for good). */
-    fun cancel(context: Context) =
+    fun cancel(context: Context) {
+        postedForId = null
         NotificationManagerCompat.from(context.applicationContext).cancel(NOTIFICATION_ID)
+    }
 
     // ------------------------------------------------------------------ plumbing
 

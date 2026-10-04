@@ -117,6 +117,15 @@ class Tab(val id: String, val sessionId: String, var position: Int) {
      * produce no callbacks (see TabManager.setPageScale).
      */
     var appliedScale: Int? = null
+    /**
+     * Last active/focused state pushed to Gecko for this tab's CURRENT GeckoSession
+     * (setActive + setFocused + extensions setTabActive), null = nothing pushed yet. Lets
+     * [TabManager.setDisplayed] skip the binder round-trips for tabs already in the requested
+     * state - a switch used to push to every live session even though only two tabs change.
+     * Reset whenever the session object is created, reopened or dropped: a fresh GeckoSession
+     * has an unknown state.
+     */
+    var nativeActiveState: Boolean? = null
     var createdAt: Long = System.currentTimeMillis()
     var lastActiveAt: Long = createdAt
 

@@ -17,6 +17,7 @@ class BrowserApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        val initStart = android.os.SystemClock.uptimeMillis()
         instance = this
         val processName = getProcessName()
         isMainProcess = processName == packageName
@@ -58,6 +59,9 @@ class BrowserApp : Application() {
         // page load, so the first tab does not sit blank while Gecko initialises.
         core.engine.warmUp()
         AppLog.i(TAG, "Application created (debug=${BuildConfig.DEBUG})")
+        // v2.1.10 (Plan 2, perf): cold-start cost marker - visible in release logs (AppLog.i/w pass
+        // through), one line per process start.
+        AppLog.w("Perf", "Application.onCreate ${android.os.SystemClock.uptimeMillis() - initStart} ms")
     }
 
     override fun onTrimMemory(level: Int) {

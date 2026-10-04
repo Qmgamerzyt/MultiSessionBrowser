@@ -53,6 +53,10 @@ interface TabDao {
     @Upsert
     suspend fun upsertAll(tabs: List<TabEntity>)
 
+    /** Title-only write (v2.1.10 perf): an SPA title change must not reserialise the whole row. */
+    @Query("UPDATE tabs SET title = :title WHERE id = :id")
+    suspend fun updateTitle(id: String, title: String)
+
     @Query("DELETE FROM tabs WHERE id = :id")
     suspend fun delete(id: String)
 

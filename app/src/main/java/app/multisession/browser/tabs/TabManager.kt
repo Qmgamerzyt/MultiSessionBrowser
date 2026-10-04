@@ -4,6 +4,7 @@ import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import app.multisession.browser.core.AppLog
 import app.multisession.browser.core.BrowserCore
 import app.multisession.browser.core.Prefs
@@ -565,6 +566,17 @@ class TabManager(private val core: BrowserCore) {
         }
     }
 
+    /**
+     * Title-only persist (v2.1.10 perf): [persistTab] takes a SessionState snapshot and serialises it
+     * to JSON on every call, and page titles change often on SPAs (unread counts, clocks) without
+     * anything else about the tab moving. The title is its own column and does not live in the JSON.
+     */
+    fun persistTitle(tab: Tab) {
+        val id = tab.id
+        val title = tab.title
+        core.persist { core.repo.tabs.updateTitle(id, title) }
+    }
+
     fun persistAll() = persistSnapshots(tabs.values.map { it.snapshot() })
 
     private fun persistSession(sessionId: String) = persistSnapshots(tabsFor(sessionId).map { it.snapshot() })
@@ -682,6 +694,7 @@ class TabManager(private val core: BrowserCore) {
             if (existing.isOpen) return existing
             // A session Gecko closed (content process gone) can be reopened as-is.
             existing.open(core.engine.runtime)
+            tab.nativeActiveState = null   // fresh docshell: the next setDisplayed must push again
             if (loadContent) restoreOrLoad(tab, existing)
             return existing
         }
@@ -690,6 +703,7 @@ class TabManager(private val core: BrowserCore) {
         val gs = SessionFactory.create(core, tab, session)
         gs.open(core.engine.runtime)
         tab.geckoSession = gs
+        tab.nativeActiveState = null
         AppLog.i(TAG, "GeckoSession opened tab=${tab.id.take(8)} context=${core.isolation.contextId(session).take(16)} live=${liveCount()}")
         if (loadContent) restoreOrLoad(tab, gs)
         return gs
@@ -728,6 +742,7 @@ class TabManager(private val core: BrowserCore) {
         core.extensions.setTabActive(gs, false)
         core.extensions.forgetSession(gs)
         tab.geckoSession = null
+        tab.nativeActiveState = null
         tab.isLoading = false
         tab.awaitingDisplay = false
         tab.isPlayingMedia = false
@@ -756,10 +771,15 @@ class TabManager(private val core: BrowserCore) {
     fun setDisplayed(displayed: Tab?) {
         val changed = displayed !== displayedTab
         displayedTab = displayed
+        val start = SystemClock.uptimeMillis()
         tabs.values.forEach { t ->
             val gs = t.geckoSession ?: return@forEach
             if (!gs.isOpen) return@forEach
             val isIt = t === displayed
+            // v2.1.10 (perf): only tabs whose state actually changes talk to Gecko. This used to push
+            // setActive + setFocused + setTabActive to EVERY live session on every switch - N-2 of the
+            // calls redundantly, N binder round-trips for a two-tab change.
+            if (t.nativeActiveState == isIt) return@forEach
             try {
                 gs.setActive(isIt)
                 gs.setFocused(isIt)
@@ -767,6 +787,7 @@ class TabManager(private val core: BrowserCore) {
                 AppLog.w(TAG, "setActive failed", t2)
             }
             core.extensions.setTabActive(gs, isIt)
+            t.nativeActiveState = isIt
         }
         if (changed) {
             host?.onDisplayedTabChanged(displayed)
@@ -775,6 +796,9 @@ class TabManager(private val core: BrowserCore) {
             // native set; tabs whose percent already matches are skipped without any engine traffic.
             displayed?.let { PageScale.applyFor(core, it) }
         }
+        // One-shot cost marker for field diagnosis (tab switches must stay well under a frame).
+        val took = SystemClock.uptimeMillis() - start
+        if (took >= 16) AppLog.w(TAG, "setDisplayed took $took ms (live=${liveCount()})")
     }
 
     /** Background tabs that may be hibernated automatically: not displayed, not a pending popup, not playing / capturing media. */
@@ -867,6 +891,7 @@ class TabManager(private val core: BrowserCore) {
         host?.onSessionClosing(tab)
         val gs = tab.geckoSession
         tab.geckoSession = null
+        tab.nativeActiveState = null
         tab.isLoading = false
         tab.awaitingDisplay = false
         tab.isPlayingMedia = false

@@ -14,6 +14,7 @@ import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Process
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.text.format.Formatter
@@ -179,6 +180,16 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     /** v2.1.8 option C: the labelled "Extension actions" sheet. */
     private var extensionActions: BottomSheetDialog? = null
 
+    // ---- v2.1.10 (Plan 2, perf): change-detection caches so per-tick/per-emission updates are free ----
+    /** Session the chip already renders (id+name+color); see [updateSessionChip]. */
+    private var chipSession: SessionEntity? = null
+    /** Last drawable res set on [securityIcon]; 0 = none yet (see [updateToolbar]). */
+    private var securityIconRes = 0
+    /** Last drawable res set on [reloadStopButton]; 0 = none yet (see [updateToolbar]). */
+    private var reloadIconRes = 0
+    /** One-shot cold-start marker for the "first window focus" PERF log. */
+    private var firstFrameLogged = false
+
     // ---- v2.1.10 (A9): per-gesture GeckoView InputResultDetail for pull-to-refresh ----
     /** Bumped on every ACTION_DOWN over the page: tags detail results and rejects stale ones. */
     private var ptrGesture = 0
@@ -247,6 +258,16 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         super.onNewIntent(intent)
         setIntent(intent)
         if (uiReady) handleIntent(intent)
+    }
+
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        super.onWindowFocusChanged(hasWindowFocus)
+        // v2.1.10 (Plan 2, perf): one-shot cold-start marker - process start to first interactive
+        // frame, exactly what the user experiences (logcat tag Perf, visible in release builds).
+        if (hasWindowFocus && !firstFrameLogged) {
+            firstFrameLogged = true
+            AppLog.w("Perf", "first window focus ${SystemClock.elapsedRealtime() - Process.getStartElapsedRealtime()} ms after process start")
+        }
     }
 
     private fun handleIntent(intent: Intent?) {
@@ -857,6 +878,11 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
 
     private fun updateSessionChip(session: SessionEntity?) {
         session ?: return
+        // v2.1.10 (perf): the active-session flow also emits on mere touches of the session row;
+        // rebuild the tinted dot + findViewById only when what the chip shows actually changed.
+        val shown = chipSession
+        if (shown != null && shown.id == session.id && shown.name == session.name && shown.color == session.color) return
+        chipSession = session
         sessionName.text = session.name
         val dot = DrawableCompat.wrap(ContextCompat.getDrawable(this, R.drawable.bg_dot)!!.mutate())
         DrawableCompat.setTint(dot, session.color)
@@ -878,16 +904,24 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
             val text = if (tab.isStartPage) "" else tab.url
             if (urlInput.text?.toString() != text) urlInput.setText(text)
         }
-        securityIcon.setImageResource(
-            when {
-                tab.isStartPage -> R.drawable.ic_search
-                UrlUtils.isLocalContent(tab.url) -> R.drawable.ic_lock
-                UrlUtils.isSecure(tab.url) && (tab.isSecure || tab.isLoading) -> R.drawable.ic_lock
-                else -> R.drawable.ic_info
-            }
-        )
-        reloadStopButton.setImageResource(if (tab.isLoading) R.drawable.ic_close else R.drawable.ic_refresh)
-        reloadStopButton.contentDescription = getString(if (tab.isLoading) R.string.stop else R.string.reload)
+        // v2.1.10 (perf): updateToolbar runs on every progress tick - the two drawables only change
+        // when their predicate flips, so skip the setImageResource (drawable allocation + invalidation).
+        val securityRes = when {
+            tab.isStartPage -> R.drawable.ic_search
+            UrlUtils.isLocalContent(tab.url) -> R.drawable.ic_lock
+            UrlUtils.isSecure(tab.url) && (tab.isSecure || tab.isLoading) -> R.drawable.ic_lock
+            else -> R.drawable.ic_info
+        }
+        if (securityRes != securityIconRes) {
+            securityIconRes = securityRes
+            securityIcon.setImageResource(securityRes)
+        }
+        val reloadRes = if (tab.isLoading) R.drawable.ic_close else R.drawable.ic_refresh
+        if (reloadRes != reloadIconRes) {
+            reloadIconRes = reloadRes
+            reloadStopButton.setImageResource(reloadRes)
+            reloadStopButton.contentDescription = getString(if (tab.isLoading) R.string.stop else R.string.reload)
+        }
         // v2.1.7 (G): while Gecko has not reported the first byte yet (or the navigation was issued by
         // this app and onPageStart has not fired) the bar runs in indeterminate mode instead of
         // staying invisible/at 0 for seconds.
