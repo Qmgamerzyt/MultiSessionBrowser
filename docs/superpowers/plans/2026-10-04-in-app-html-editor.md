@@ -86,7 +86,7 @@ curl -fLo app/src/main/assets/editor/mode/javascript/javascript.min.js $B/mode/j
 curl -fLo app/src/main/assets/editor/mode/css/css.min.js               $B/mode/css/css.min.js
 curl -fLo app/src/main/assets/editor/mode/htmlmixed/htmlmixed.min.js   $B/mode/htmlmixed/htmlmixed.min.js
 curl -fLo app/src/main/assets/editor/addon/dialog/dialog.min.js $B/addon/dialog/dialog.min.js
-curl -fLo app/src/main/assets/editor/addon/dialog/dialog.css    $B/addon/dialog/dialog.css
+curl -fLo app/src/main/assets/editor/dialog.css                $B/addon/dialog/dialog.css
 curl -fLo app/src/main/assets/editor/addon/search/searchcursor.min.js $B/addon/search/searchcursor.min.js
 curl -fLo app/src/main/assets/editor/addon/search/search.min.js       $B/addon/search/search.min.js
 ```
