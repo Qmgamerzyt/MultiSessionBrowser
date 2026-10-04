@@ -21,8 +21,10 @@ storeId ``firefox-container-session-<id>`` -> NaN -> "Invalid cookie store id"
 ``cookies.getAll()`` has always come back empty and ``set()``/``remove()``
 have always failed.
 
-This script rewrites four Gecko files inside ``assets/omni.ja`` so that the
-session context id becomes a first-class cookie store:
+This script rewrites five Gecko files inside ``assets/omni.ja``:
+
+COOKIE ISOLATION (v2.1.9 - the session context id becomes a first-class
+cookie store):
 
   modules/GeckoViewTab.sys.mjs
       expose ``Tab.sessionContextId`` (the SAFE id, next to the existing
@@ -43,6 +45,20 @@ Isolation is preserved, not weakened:
   * ``cookies``, host permissions and the private-browsing permission gate
     (``context.privateBrowsingAllowed``) are all still enforced by the
     untouched parts of ext-cookies.js.
+
+PAGE ZOOM (v2.1.10 - native full zoom without a page-zoom API):
+
+  modules/GeckoViewNavigation.sys.mjs
+      the ``GeckoView:LoadUri`` handler intercepts app-issued
+      ``moz-scale:<percent>`` URIs and writes ``browsingContext.fullZoom``
+      instead of navigating. GeckoView 155 exposes no zoom API to Java, and
+      the previous CSS-zoom javascript: load was blocked by the Content
+      Security Policy of sites like Discord; this path never enters the
+      content process at all. The URI is only reachable from the app
+      (``GeckoSession.Loader.flags(LOAD_FLAGS_BYPASS_LOAD_URI_DELEGATE)``
+      approves it before dispatch), the page-initiated counterpart is
+      denied in ``TabDelegates.onLoadRequest``, and PageScale clamps the
+      percent to 50..200 before it is ever sent.
 
 USAGE
 -----
@@ -348,6 +364,42 @@ global.isSessionContextCookieStoreId = function (storeId) {
                 key.startsWith(SESSION_CONTEXT_PRIVATE_STORE),
 """,
     ),
+    # -----------------------------------------------------------------------------------------
+    # 5/5  modules/GeckoViewNavigation.sys.mjs - moz-scale: sets the tab's native zoom.
+    # -----------------------------------------------------------------------------------------
+    (
+        "modules/GeckoViewNavigation.sys.mjs",
+        "GeckoViewNavigation: moz-scale URIs set browsingContext.fullZoom",
+        """      case "GeckoView:LoadUri": {
+        const {
+          uri,
+          referrerUri,
+""",
+        """      case "GeckoView:LoadUri": {
+        // MultiSessionBrowser (v2.1.10): an app-issued "moz-scale:<percent>"
+        // URI asks for this tab's NATIVE page zoom instead of a navigation.
+        // It arrives with LOAD_FLAGS_BYPASS_LOAD_URI_DELEGATE (the app
+        // approved it in its own NavigationDelegate), never enters the
+        // content process - no history entry, no session-state event, and a
+        // site's Content-Security-Policy cannot block it - and the percent
+        // was clamped to 50..200 by PageScale before dispatch. A page-initiated
+        // moz-scale: load never gets here: it lacks the bypass flag and is
+        // denied in TabDelegates.onLoadRequest.
+        if (typeof aData.uri == "string" && aData.uri.startsWith("moz-scale:")) {
+          const pct = parseInt(aData.uri.slice(10), 10);
+          if (Number.isInteger(pct) && pct >= 25 && pct <= 500) {
+            const bc = this.browser && this.browser.browsingContext;
+            if (bc) {
+              bc.fullZoom = pct / 100;
+            }
+          }
+          break;
+        }
+        const {
+          uri,
+          referrerUri,
+""",
+    ),
 ]
 
 # Texts that must be present in a patched file and absent from a stock one.
@@ -358,6 +410,7 @@ PATCH_MARKERS = [
     "isSessionContextCookieStoreId(storeId)",
     "originAttributes.geckoViewSessionContextId =",
     "cookie.originAttributes.geckoViewSessionContextId",
+    "bc.fullZoom = pct / 100",
 ]
 
 

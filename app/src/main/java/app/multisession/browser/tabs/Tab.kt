@@ -109,23 +109,12 @@ class Tab(val id: String, val sessionId: String, var position: Int) {
      */
     var pendingScript: String? = null
     /**
-     * Slot for a script the APP issued itself (currently only the page-scale script). Kept apart from
-     * [pendingScript] on purpose: both are `javascript:` loads that survive an unrelated navigation in
-     * between, so a bookmarklet queued while a scale change is in flight must never be able to consume
-     * the scale load (or the other way round) - each load is matched against its own slot.
-     */
-    var internalScript: String? = null
-    /**
-     * One-shot "an app-issued script load is in flight". While it is set, the callbacks that load
-     * produces (page start, progress, location, page stop, error) are swallowed instead of driving the
-     * progress bar, the address bar or the history - and `onPageStop` must not re-apply the scale, which
-     * is what issued it. Cleared on completion, on error, and at the start of any real navigation.
-     */
-    var internalLoad: Boolean = false
-    /**
-     * Page scale percent (50..200) currently applied to the *document* of this tab, or null when the
-     * document has none (fresh page, restored session). It only changes through [internalScript], so it
-     * is what stops a scale change from issuing a second, unnecessary in-page load.
+     * Native page zoom percent (50..200) this tab's browsing context was explicitly set to, or null
+     * when unknown/expired. Null means "must set": a fresh document, a restored session or a
+     * navigation may still carry the previous document's zoom (the engine's zoom persists on the
+     * context), so [app.multisession.browser.engine.PageScale.applyFor] re-issues an explicit set
+     * instead of trusting the default. It is the only record of what was set - `moz-scale:` loads
+     * produce no callbacks (see TabManager.setPageScale).
      */
     var appliedScale: Int? = null
     var createdAt: Long = System.currentTimeMillis()

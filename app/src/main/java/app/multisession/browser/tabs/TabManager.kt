@@ -610,16 +610,30 @@ class TabManager(private val core: BrowserCore) {
      * so its completion value is undefined: Gecko therefore never replaces the document with a returned string.
      * Only this app-initiated load passes NavigationDelegate.onLoadRequest (see [Tab.pendingScript]).
      */
-    fun runScript(tab: Tab, source: String): Boolean = loadScript(tab, source, internal = false)
+    fun runScript(tab: Tab, source: String): Boolean = loadScript(tab, source)
 
     /**
-     * Runs one of the app's own scripts (page scale) through the same `javascript:` loader, but tagged
-     * in [Tab.internalScript] and flagged with [Tab.internalLoad] so it can never be confused with a
-     * bookmarklet and never produces visible page-load state. See [PageScale].
+     * Applies [percent] (already clamped by `PageScale`) as the tab's NATIVE page zoom. v2.1.10:
+     * `moz-scale:<percent>` is intercepted by the patched omni.js (`GeckoViewNavigation`) and written to
+     * `browsingContext.fullZoom` - it never enters the content process, so no page policy applies to it.
+     * This replaced the old CSS-`zoom` javascript: load, which the Content-Security-Policy of sites like
+     * Discord silently blocked (the Plan-2 "scale does nothing on some sites" root cause).
+     *
+     * The BYPASS flag routes the load straight to omni.js: `TabDelegates.onLoadRequest` never sees our own
+     * URI, and a page-initiated `moz-scale:` link (which lacks the flag) is denied there. No history
+     * entry, no start/progress/stop callbacks, no feedback loop - [Tab.appliedScale] is the only record.
      */
-    fun runInternalScript(tab: Tab, source: String): Boolean = loadScript(tab, source, internal = true)
+    fun setPageScale(tab: Tab, percent: Int): Boolean {
+        val gs = tab.geckoSession?.takeIf { it.isOpen } ?: return false
+        gs.load(
+            GeckoSession.Loader()
+                .uri("moz-scale:$percent")
+                .flags(GeckoSession.LOAD_FLAGS_BYPASS_LOAD_URI_DELEGATE)
+        )
+        return true
+    }
 
-    private fun loadScript(tab: Tab, source: String, internal: Boolean): Boolean {
+    private fun loadScript(tab: Tab, source: String): Boolean {
         val gs = tab.geckoSession?.takeIf { it.isOpen } ?: return false
         if (tab.isStartPage) return false
         var body = source.trim()
@@ -629,23 +643,13 @@ class TabManager(private val core: BrowserCore) {
         // pre-encoded bookmarklets (%20 ...) are not double-encoded.
         val safe = body.replace("%0A", "\n").replace("#", "%23").replace("\r", "%0D").replace("\n", "%0A").replace("\t", "%09")
         val wrapped = "javascript:(function(){try{$safe\n}catch(e){console.error('[bookmarklet]',e)}})();void 0"
-        if (internal) {
-            tab.internalScript = wrapped
-            tab.internalLoad = true
-        } else {
-            tab.pendingScript = wrapped
-        }
+        tab.pendingScript = wrapped
         try {
             gs.load(GeckoSession.Loader().uri(wrapped))
         } catch (t: Throwable) {
             // Never leave a slot set that Gecko will not be asked to consume: a stale slot would
             // authorize whatever javascript: navigation happens to arrive next.
-            if (internal) {
-                tab.internalScript = null
-                tab.internalLoad = false
-            } else {
-                tab.pendingScript = null
-            }
+            tab.pendingScript = null
             AppLog.w(TAG, "runScript failed", t)
             return false
         }
@@ -766,10 +770,9 @@ class TabManager(private val core: BrowserCore) {
         }
         if (changed) {
             host?.onDisplayedTabChanged(displayed)
-            // A restored / re-hibernated tab can hold a document that was never given this session's
-            // page scale (its `appliedScale` is still null even though the DOM may already carry the
-            // zoom from before). Cheap no-op once the document matches: PageScale skips the in-page
-            // load when the current percent already equals the wanted one.
+            // A restored / re-hibernated tab has an unknown appliedScale (null) even though its
+            // context may still carry the previous document's zoom, so applyFor re-issues an explicit
+            // native set; tabs whose percent already matches are skipped without any engine traffic.
             displayed?.let { PageScale.applyFor(core, it) }
         }
     }

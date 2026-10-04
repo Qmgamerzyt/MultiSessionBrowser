@@ -44,13 +44,9 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
     ) {
         // Also fires for pushState/replaceState navigations in SPAs and for redirects.
         val u = url ?: return
-        // While the app's own in-page script (page scale) is in flight this callback belongs to that
-        // script, not to a page - and a `javascript:` URL must never reach the address bar anyway.
-        // This is deliberately keyed on `internalLoad` and not on the reported URL: a `javascript:`
-        // load can report either the script or the page it ran against, so only the marker is a safe
-        // discriminator. Releasing the marker here would be wrong too - a start/stop callback for the
-        // script would then look like a fresh document and re-apply the scale (the loop this guards).
-        if (tab.internalLoad || u.startsWith("javascript:", ignoreCase = true)) return
+        // A `javascript:` URL must never reach the address bar: a bookmarklet load can report either
+        // the script or the page it ran against, and neither belongs in the URL bar.
+        if (u.startsWith("javascript:", ignoreCase = true)) return
         tab.sitePermissions = perms.toList()   // Gecko's stored permissions for this page (Site permissions dialog)
         if (u == "about:blank" && tab.awaitingDisplay) return   // popup placeholder, real URL follows
         // Leaving the site ends any camera/microphone stream it held: the tab may be hibernated again.
@@ -72,37 +68,27 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
     override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny>? {
         val uri = request.uri
         val scheme = uri.substringBefore(':', "").lowercase()
-        // A real navigation cancels an app-issued script load that may still be in flight. Drop its
-        // marker here — before the first callback of the new load — so no callback of the new page is
-        // mistaken for the script's (and so a script load that Gecko quietly never issues cannot leave
-        // the marker stuck on, swallowing the next real page).
-        if (scheme != "javascript") {
-            tab.internalLoad = false
-            tab.internalScript = null
-        }
         return when (scheme) {
             "http", "https", "about", "data", "blob", "resource", "moz-extension" -> {
                 if ((scheme == "http" || scheme == "https") && !request.isRedirect) applyDesktopSiteRule(uri)
                 if (scheme == "resource" && !uri.startsWith(LocalContentLoader.BUNDLED_BASE)) denyNavigation() else GeckoResult.allow()
             }
             "javascript" -> {
-                // Exactly two javascript: loads may run, and each is matched against ITS OWN slot so
-                // neither can consume the other: `pendingScript` is the user's bookmarklet, the
-                // in-flight scale change sits in `internalScript`. Every page-initiated javascript:
-                // navigation still finds both slots empty and stays denied, exactly as before.
+                // Exactly one javascript: load may run - the app-issued bookmarklet sitting in
+                // `pendingScript` - and it is matched against its own slot. The slot is consumed here
+                // unconditionally; every page-initiated javascript: navigation finds it empty and
+                // stays denied. (Page scale no longer uses javascript: at all: it issues `moz-scale:`
+                // with LOAD_FLAGS_BYPASS_LOAD_URI_DELEGATE, so our own zoom loads never reach this
+                // delegate - see TabManager.setPageScale.)
                 val pending = tab.pendingScript
-                val internal = tab.internalScript
-                val matchedInternal = internal != null && (request.isDirectNavigation || request.uri == internal)
-                val matchedPending = pending != null && (request.isDirectNavigation || request.uri == pending)
                 tab.pendingScript = null
-                tab.internalScript = null
-                if (matchedInternal) GeckoResult.allow()
-                else {
-                    // Whatever was attributed to an internal load will never complete: release it too.
-                    tab.internalLoad = false
-                    if (matchedPending) GeckoResult.allow()
-                    else { AppLog.i(TAG, "Blocked page-initiated javascript: navigation"); denyNavigation() }
-                }
+                if (pending != null && (request.isDirectNavigation || request.uri == pending)) GeckoResult.allow()
+                else { AppLog.i(TAG, "Blocked page-initiated javascript: navigation"); denyNavigation() }
+            }
+            "moz-scale" -> {
+                // Our own page-scale URIs bypass this delegate by design; anything arriving here is a
+                // page linking to `moz-scale:`, which must never drive the tab's zoom.
+                AppLog.i(TAG, "Blocked page-initiated moz-scale: navigation"); denyNavigation()
             }
             "file" -> if (core.localContent.isAllowedLocalUri(uri)) GeckoResult.allow() else {
                 AppLog.i(TAG, "Blocked file:// navigation outside the projects folder"); denyNavigation()
@@ -146,16 +132,6 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
     }
 
     override fun onLoadError(session: GeckoSession, uri: String?, error: WebRequestError): GeckoResult<String>? {
-        // An app-issued in-page script (page scale) failing is not a page failure: no error page, no
-        // `tab.error` — just release the marker so the next real navigation is not swallowed by it.
-        if (tab.internalLoad) {
-            AppLog.w(TAG, "In-page script load failed (code=${error.code})")
-            tab.internalLoad = false
-            tab.internalScript = null
-            tab.isLoading = false
-            tab.progress = 100
-            return null
-        }
         AppLog.w(TAG, "Load error category=${error.category} code=${error.code} for ${uri?.take(80)}")
         tab.isLoading = false
         tab.progress = 100
@@ -167,24 +143,17 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
     // ================================================================== ProgressDelegate
 
     override fun onPageStart(session: GeckoSession, url: String) {
-        // This is our OWN in-page script (page scale), not a page: swallow it entirely.
-        // Trusting `internalLoad` over the reported URL is deliberate and safe: every real navigation
-        // goes through onLoadRequest first, which clears the marker for any non-`javascript:` scheme
-        // BEFORE that navigation's onPageStart arrives. Without this guard the sequence would be
-        // apply -> onPageStop -> apply again for ever, because the script load's own page-stop would
-        // look exactly like a fresh document that still needs its scale.
-        if (tab.internalLoad) return
         tab.error = null
         tab.isLoading = true
         tab.progress = 0
         // A `javascript:` load (bookmarklet) runs against the CURRENT document: there is no new
         // page, so neither the scroll origin nor the applied zoom may be reset. Resetting them here
         // would (a) make pull-to-refresh believe a scrolled page was back at its top and (b) make
-        // PageScale issue a redundant script after every bookmarklet (the document is unchanged).
+        // PageScale issue a redundant set after every bookmarklet (the document is unchanged).
         val isScriptLoad = url.startsWith("javascript:", ignoreCase = true)
         if (!isScriptLoad) {
             tab.scrollY = 0           // a new page starts "at the very top" for pull-to-refresh (v2.1.7)
-            tab.appliedScale = null   // a fresh document carries no CSS zoom (see PageScale)
+            tab.appliedScale = null   // expired: the context may still carry the previous document's zoom (see PageScale)
         }
         if (url != "about:blank" && !isScriptLoad) tab.url = url
         core.tabs.notifyTabUpdated(tab)
@@ -195,22 +164,12 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
     }
 
     override fun onProgressChange(session: GeckoSession, progress: Int) {
-        // Progress of our own in-page script: never touch the progress bar (it would flash a
-        // phantom load each time the page scale changes).
-        if (tab.internalLoad) return
         tab.progress = progress
         tab.isLoading = progress < 100
         core.tabs.notifyTabUpdated(tab)
     }
 
     override fun onPageStop(session: GeckoSession, success: Boolean) {
-        // End of our own in-page script: nothing navigated, no history entry, no notification —
-        // and above all NO re-apply here, which is what issued this load (the loop guard).
-        if (tab.internalLoad) {
-            tab.internalLoad = false
-            tab.internalScript = null
-            return
-        }
         tab.isLoading = false
         tab.progress = 100
         if (success && tab.error == null) {
@@ -219,9 +178,8 @@ class TabDelegates(private val core: BrowserCore, private val tab: Tab) :
         } else {
             core.tabs.notifyTabUpdated(tab)
         }
-        // The document is settled: give it its page scale. A no-op when it already matches
-        // (PageScale only issues a load when the current percent differs), so an unchanged scale
-        // costs nothing and the page is never reloaded.
+        // The document is settled: push its page scale (v2.1.10: an explicit native set - a no-op
+        // only when `appliedScale` already matches the wanted percent, see PageScale).
         PageScale.applyFor(core, tab)
     }
 

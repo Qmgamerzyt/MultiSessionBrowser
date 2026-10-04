@@ -1219,7 +1219,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
      * number that merely happens to match the default today, so changing the default in Settings later
      * still applies to this site.
      *
-     * Only the in-page script runs - no reload, no lost scroll position (see engine/PageScale).
+     * Only a native zoom set runs - no reload, no lost scroll position (see engine/PageScale).
      */
     private fun showPageScaleDialog(tab: Tab) {
         val origin = SitePermissionStore.originOf(tab.url)

@@ -16,20 +16,23 @@ import app.multisession.browser.tabs.Tab
  *    rule. The value *is* the percent (50..200); "no rule" is [PermissionValue.ASK], which is what
  *    makes `set(..., ASK)` a delete and gives you the global default again. No Room migration.
  *
- * GeckoView 155 has no page-zoom API at all — the only knobs are `GeckoRuntimeSettings
- * .setFontSizeFactor` (runtime-wide and text-only, so it would ignore images and break layout) and
- * read-only zoom state — so the percent is applied in-page as CSS `zoom` on `document.documentElement`
- * through the same `javascript:` loader the bookmarklets use ([TabManager.runInternalScript]).
- * `zoom` (not `transform: scale`) keeps real layout: media queries, reflow and hit-testing all follow.
+ * GeckoView 155 exposes no page-zoom API to Java (the only knobs are `GeckoRuntimeSettings
+ * .setFontSizeFactor`, runtime-wide and text-only, and read-only zoom state), so v2.1.10 applies the
+ * percent through the patched omni.js: [TabManager.setPageScale] issues a `moz-scale:<percent>` URI
+ * that `GeckoViewNavigation` intercepts and turns into `browsingContext.fullZoom` - the same
+ * per-document full zoom desktop Firefox uses, applied natively.
  *
- * Three properties matter for correctness and are enforced by [Tab.internalScript] /
- * [Tab.internalLoad] in [TabDelegates]:
- *  1. **No reload.** Nothing but the in-page script runs; the document, its scroll and its history
- *     are untouched.
- *  2. **No interference.** The scale load has its own slot, so a bookmarklet queued at the same
- *     moment can never consume it (or be consumed by it), and page-initiated `javascript:` stays denied.
- *  3. **No feedback loop.** The load's own start/progress/stop callbacks are swallowed, so
- *     `onPageStop` cannot apply the scale again, and the progress bar never flashes.
+ * Why not the previous CSS-`zoom` approach (a `javascript:` load through [TabManager.runScript])?
+ * Because that load runs INSIDE the page, where the Content-Security-Policy applies: Discord's
+ * `script-src` has no `'unsafe-inline'`, so the zoom silently did nothing there - the Plan-2 "scale
+ * does nothing on some sites" root cause. `moz-scale:` never enters the content process, so no page policy can
+ * block it, and it creates no history entry and no load callbacks (no progress-bar flash, no feedback
+ * loop): [Tab.appliedScale] is the only record of what was set.
+ *
+ * The engine's zoom PERSISTS on the browsing context across documents - unlike in-page CSS, which
+ * every fresh document starts without - so [applyFor] re-issues explicitly whenever [Tab.appliedScale]
+ * is null (fresh document, restored session, navigation) or the wanted percent changed, and it pushes
+ * 100% onto documents that must not be scaled at all (start page, error page, privileged shells).
  */
 object PageScale {
 
@@ -48,9 +51,10 @@ object PageScale {
     private val SKIPPED_SCHEMES = setOf("about", "resource", "moz-extension", "javascript", "view-source", "chrome")
 
     /**
-     * Documents the zoom script must never touch: the start page and the native error page are app-owned
+     * Documents the zoom must not touch: the start page and the native error page are app-owned
      * UI, and `about:` / `resource://` / `moz-extension://` are privileged shells with their own layout.
-     * `http`, `https`, `file` and `data` documents are scaled.
+     * `http`, `https`, `file` and `data` documents are scaled. (Anything not scalable is explicitly
+     * brought to [DEFAULT_PERCENT] instead of left at whatever zoom the previous document had.)
      */
     fun isScalable(tab: Tab): Boolean {
         val url = tab.url
@@ -66,28 +70,20 @@ object PageScale {
         return clamp(if (rule in MIN_PERCENT..MAX_PERCENT) rule else Prefs.pageScaleDefault)
     }
 
-    /** The in-page script for [percent]. Single line, no `#`, no newlines — [TabManager] encodes it. */
-    private fun script(percent: Int): String {
-        val z = clamp(percent) / 100.0
-        return "var d=document.documentElement;if(d){var o=parseFloat(d.style.zoom)||1;var n=$z;if(o!==n){" +
-            "var x=window.scrollX||0,y=window.scrollY||0;d.style.zoom=n;window.scrollTo(x*n/o,y*n/o);}}"
-    }
-
     /**
-     * Brings [tab]'s document to its wanted percent, issuing an in-page load only when the document is
-     * not already there. @return true when a script was actually issued.
+     * Brings [tab]'s browsing context to its wanted percent (see the class KDoc for why that is an
+     * explicit set, not a diff). @return true when a set was actually issued.
      */
     fun applyFor(core: BrowserCore, tab: Tab): Boolean {
-        if (!isScalable(tab)) return false
         // While the page is still loading, touching it now would race that load's own start callback
         // (see TabDelegates.onPageStart): the document is about to settle anyway, so onPageStop does it.
         if (tab.isLoading) return false
-        val want = percentFor(core, tab)
-        // A document with no recorded scale is at the CSS default of 100%: nothing to do for the
-        // default, and a single (idempotent) script for anything else.
-        val have = tab.appliedScale ?: DEFAULT_PERCENT
-        if (have == want) return false
-        if (!core.tabs.runInternalScript(tab, script(want))) return false
+        val want = if (isScalable(tab)) percentFor(core, tab) else DEFAULT_PERCENT
+        // null = "unknown or expired": the context may still carry the previous document's zoom, so an
+        // explicit set is required even when `want` is the default.
+        val have = tab.appliedScale
+        if (have != null && have == want) return false
+        if (!core.tabs.setPageScale(tab, want)) return false
         tab.appliedScale = want
         AppLog.i(TAG, "scale=$want% for ${SitePermissionStore.originOf(tab.url) ?: "internal page"}")
         return true
