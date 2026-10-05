@@ -18,6 +18,7 @@
     <string name="bookmarks">Bookmarks</string>
     <string name="bookmarks_empty">No bookmarks yet</string>
     <string name="cd_color">Session colour</string>
+    <string name="cd_execute">Execute</string>
     <string name="cd_security">Connection security</string>
     <string name="cd_session_chip">Current session: %1$s. Tap to switch</string>
     <string name="choose_file">Choose file</string>

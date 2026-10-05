@@ -173,6 +173,17 @@
                         android:selectAllOnFocus="true"
                         android:singleLine="true"
                         android:textSize="15sp" />
+                    <!-- v2.2.0-beta-2: shown while editing whenever the input contains ':' - one tap
+                         executes the typed command/URL (see UrlUtils.resolveInput ":" rule). -->
+                    <ImageButton
+                        android:id="@+id/executeButton"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="@string/cd_execute"
+                        android:src="@drawable/ic_play"
+                        android:visibility="gone"
+                        app:tint="?attr/colorOnSurfaceVariant" />
                     <ImageButton
                         android:id="@+id/reloadStopButton"
                         android:layout_width="40dp"

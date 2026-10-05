@@ -24,10 +24,13 @@ object UrlUtils {
     fun isJavaScriptUrl(input: String?): Boolean = input?.trimStart()?.lowercase()?.startsWith("javascript:") == true
 
     /**
-     * Address-bar resolution:
+     * Address-bar resolution (v2.2.0-beta-2):
      *  - javascript: -> returned unchanged; the caller executes it in the current page (never searched, never navigated)
-     *  - explicit scheme -> load as-is (file: is refused)
-     *  - looks like a host/IP -> https:// (HTTPS-first; user can type http:// explicitly)
+     *  - looks like a host/IP (incl. host:port) without a scheme -> https:// (HTTPS-first; type http:// explicitly)
+     *  - ANY other input containing ':' -> executable, loaded as-is (file:, http:, data:, intent:, ...).
+     *    There is deliberately no per-scheme allowlist: one ':' makes the input a command/URL, never a
+     *    search query. The engine still enforces its own policy per scheme (e.g. file:// is allowed
+     *    only inside the projects folder - see LocalContentLoader.isAllowedLocalUri).
      *  - anything else -> configured search engine
      */
     fun resolveInput(raw: String): String {
@@ -36,12 +39,8 @@ object UrlUtils {
         if (isJavaScriptUrl(input)) return input
         val lower = input.lowercase()
         if (lower == START_PAGE || lower == "about:blank") return START_PAGE
-        if (lower.startsWith("file:")) {
-            return Prefs.searchUrlFor(input)
-        }
-        val passThrough = listOf("http://", "https://", "content://", "data:", "about:", "intent:", "moz-extension://")
-        if (passThrough.any { lower.startsWith(it) }) return input
         if (looksLikeHost(input)) return "https://$input"
+        if (input.contains(':')) return input
         return Prefs.searchUrlFor(input)
     }
 

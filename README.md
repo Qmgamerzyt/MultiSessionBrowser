@@ -136,6 +136,14 @@ Issues and pull requests are welcome.
 Releases follow a **beta train**: while only fixes land, versions increment `2.2.0-beta-1`,
 `2.2.0-beta-2`, …; the next feature wave starts a new minor.
 
+### 2.2.0-beta-2
+- **Address bar: any `:` input is executable.** Instead of an ever-growing per-scheme allowlist,
+  any typed command/URL containing a colon (`file:`, `http:`, `data:`, `intent:`, `javascript:`, …)
+  is executed as-is and never sent to the search engine; schemeless hosts (`example.com:8080`)
+  still get `https://` automatically. `file:` URLs load only inside the projects folder (unchanged
+  engine policy). While the address bar is focused, an **Execute ▶ button** appears whenever the
+  input contains `:` — one tap runs it (Enter/Go works as before).
+
 ### 2.2.0-beta-1
 - **Critical fix — tabs disappearing after a restart:** app start-up is now fault-isolated per
   data source, so a single unreadable database row can no longer zero the tab grid, skip

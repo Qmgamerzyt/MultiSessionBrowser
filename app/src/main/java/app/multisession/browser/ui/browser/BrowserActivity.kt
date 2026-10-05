@@ -132,6 +132,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     private lateinit var sessionName: TextView
     private lateinit var focusHolder: View
     private lateinit var urlInput: EditText
+    private lateinit var executeButton: ImageButton
     private lateinit var securityIcon: ImageView
     private lateinit var reloadStopButton: ImageButton
     private lateinit var progressBar: ProgressBar
@@ -364,6 +365,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         sessionName = findViewById(R.id.sessionName)
         focusHolder = findViewById(R.id.focusHolder)
         urlInput = findViewById(R.id.urlInput)
+        executeButton = findViewById(R.id.executeButton)
         securityIcon = findViewById(R.id.securityIcon)
         reloadStopButton = findViewById(R.id.reloadStopButton)
         progressBar = findViewById(R.id.progressBar)
@@ -425,12 +427,17 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
                 navigate(v.text.toString()); true
             } else false
         }
+        // v2.2.0-beta-2: explicit Execute button for ':' input. pendingExecute snapshots the typed
+        // text so a focus change racing the tap can never navigate the page URL instead.
+        executeButton.setOnClickListener { navigate(pendingExecute) }
         urlInput.setOnFocusChangeListener { _, hasFocus ->
             if (hasFocus) {
                 urlInput.post { if (urlInput.hasFocus()) urlInput.selectAll() }
+                refreshExecuteButton()
             } else {
                 // Search mode ended: suggestions are only valid while the bar is focused.
                 suggestionPopup.dismiss()
+                executeButton.isVisible = false
                 currentTab?.let { updateToolbar(it) }
             }
         }
@@ -440,8 +447,9 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
             override fun afterTextChanged(s: android.text.Editable?) {
                 // Only user typing (bar focused) may open suggestions. Programmatic setText() from
                 // updateToolbar() must never do so.
-                if (!isSearchActive()) { suggestionPopup.dismiss(); return }
+                if (!isSearchActive()) { suggestionPopup.dismiss(); executeButton.isVisible = false; return }
                 val input = s?.toString() ?: return
+                refreshExecuteButton()
                 if (UrlUtils.isJavaScriptUrl(input)) { suggestionPopup.dismiss(); return }   // bookmarklets are never "searched"
                 val session = core.sessions.get(currentTab?.sessionId ?: return) ?: return
                 suggestionPopup.showSuggestions(input, session.id)
@@ -536,6 +544,18 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     /** The single source of truth for "search mode": the address bar has input focus in a started Activity. */
     private fun isSearchActive(): Boolean =
         ::urlInput.isInitialized && urlInput.hasFocus() && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+
+    /** Last user-typed address-bar text in search mode: the Execute button navigates this snapshot,
+     *  so a focus change racing the tap can never substitute the page URL. */
+    private var pendingExecute: String = ""
+
+    /** v2.2.0-beta-2: while editing, the Execute button shows iff the input contains ':'
+     *  (the UrlUtils.resolveInput rule for executable commands/URLs). */
+    private fun refreshExecuteButton() {
+        val show = isSearchActive() && urlInput.text.contains(':')
+        executeButton.isVisible = show
+        if (show) pendingExecute = urlInput.text.toString()
+    }
 
     /**
      * Leaves search mode explicitly: hides suggestions and the keyboard and parks focus on the

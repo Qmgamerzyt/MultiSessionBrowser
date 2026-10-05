@@ -13,7 +13,9 @@ import java.io.IOException
  *
  * Security: Gecko treats every file:// document as its own origin (strict origin policy), and
  * [isAllowedLocalUri] is enforced in NavigationDelegate.onLoadRequest so the ONLY file:// URLs a
- * page can navigate to are inside the projects folder. Typed file: URLs are still refused by UrlUtils.
+ * page can navigate to are inside the projects folder. Since v2.2.0-beta-2 a typed file: URL is
+ * passed through by UrlUtils (":" rule) and reaches that same engine check - allowed only here,
+ * denied everywhere else.
  */
 class LocalContentLoader(context: Context) {
 
