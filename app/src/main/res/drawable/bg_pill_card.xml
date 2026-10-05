@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Transient download card background: fixed dark colour, readable over light and dark pages. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#F0262A33" />
+    <corners android:radius="18dp" />
+</shape>

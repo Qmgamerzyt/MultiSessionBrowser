@@ -241,6 +241,85 @@
                     app:tint="@android:color/white" />
             </FrameLayout>
         </LinearLayout>
+
+        <!-- v2.2.0-beta-3: transient bottom overlays (children of the Coordinator, so they float
+             above the chrome). networkPill = connectivity chip (~2.5 s, drag to dismiss).
+             downloadPill = 5-second download card: tap or drag DOWN opens Downloads, any other
+             drag dismisses - see BrowserActivity.showNetworkPill / showDownloadPill. -->
+        <TextView
+            android:id="@+id/networkPill"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="104dp"
+            android:background="@drawable/bg_pill"
+            android:elevation="10dp"
+            android:paddingStart="22dp"
+            android:paddingTop="11dp"
+            android:paddingEnd="22dp"
+            android:paddingBottom="11dp"
+            android:textColor="@android:color/white"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/downloadPill"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
+            android:layout_marginBottom="52dp"
+            android:background="@drawable/bg_pill_card"
+            android:elevation="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="14dp"
+            android:visibility="gone">
+            <ImageView
+                android:id="@+id/downloadPillIcon"
+                android:layout_width="26dp"
+                android:layout_height="26dp"
+                android:layout_marginEnd="12dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_download"
+                app:tint="@android:color/white" />
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+                <TextView
+                    android:id="@+id/downloadPillTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="@android:color/white"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+                <TextView
+                    android:id="@+id/downloadPillSub"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="#B3FFFFFF"
+                    android:textSize="12sp" />
+                <ProgressBar
+                    android:id="@+id/downloadPillProgress"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="4dp"
+                    android:layout_marginTop="7dp"
+                    android:indeterminate="true"
+                    android:max="100"
+                    android:progressTint="@android:color/white"
+                    android:progressBackgroundTint="#4DFFFFFF"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </LinearLayout>
     </androidx.coordinatorlayout.widget.CoordinatorLayout>
 
     <!-- Left: app-owned session drawer -->

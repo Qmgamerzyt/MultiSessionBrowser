@@ -86,13 +86,9 @@ class SuggestionPopup(
     private suspend fun generateSuggestions(input: String, sessionId: String): List<SuggestionItem> {
         val suggestions = mutableListOf<SuggestionItem>()
 
-        suggestions.add(SuggestionItem(
-            SuggestionItem.Type.SEARCH,
-            context.getString(R.string.suggestion_search, input),
-            Prefs.searchUrlFor(input),
-            R.drawable.ic_search
-        ))
-
+        // v2.2.0-beta-3: the ACTION row comes FIRST - anything that is a URL or an executable ':'
+        // command offers "open it" above "search for it" (backspacing https:// off a typed URL used
+        // to leave only the search row / bury the navigate row under it).
         if (UrlUtils.looksLikeHost(input)) {
             val url = if (input.startsWith("http")) input else "https://$input"
             suggestions.add(SuggestionItem(
@@ -101,7 +97,21 @@ class SuggestionPopup(
                 url,
                 R.drawable.ic_language
             ))
+        } else if (input.contains(':')) {
+            suggestions.add(SuggestionItem(
+                SuggestionItem.Type.NAVIGATE,
+                context.getString(R.string.suggestion_execute, input),
+                UrlUtils.resolveInput(input),
+                R.drawable.ic_play
+            ))
         }
+
+        suggestions.add(SuggestionItem(
+            SuggestionItem.Type.SEARCH,
+            context.getString(R.string.suggestion_search, input),
+            Prefs.searchUrlFor(input),
+            R.drawable.ic_search
+        ))
 
         try {
             val historyMatches = withContext(Dispatchers.IO) {

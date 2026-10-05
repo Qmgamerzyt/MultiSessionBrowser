@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
@@ -148,6 +149,17 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     private lateinit var fullscreenExit: FullscreenExitButton
     private lateinit var homeButton: ImageButton
     private lateinit var downloadBanner: TextView
+    // v2.2.0-beta-3: transient bottom pills (connectivity chip + 5-second download card).
+    private lateinit var networkPill: TextView
+    private lateinit var downloadPill: View
+    private lateinit var downloadPillIcon: ImageView
+    private lateinit var downloadPillTitle: TextView
+    private lateinit var downloadPillSub: TextView
+    private lateinit var downloadPillProgress: ProgressBar
+    private var networkAvailable = true
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private val downloadStates = HashMap<String, Int>()
+    private var pillDownloadId: String? = null
 
     /** Created lazily and attached to [webContainer] only together with an OPEN session (see attachSession). */
     private var geckoView: GeckoView? = null
@@ -372,9 +384,17 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         webContainer = findViewById(R.id.webContainer)
         downloadBanner = findViewById(R.id.downloadBanner)
         downloadBanner.setOnClickListener { openUrlLauncher.launch(Intent(this, DownloadsActivity::class.java)) }
+        networkPill = findViewById(R.id.networkPill)
+        downloadPill = findViewById(R.id.downloadPill)
+        downloadPillIcon = findViewById(R.id.downloadPillIcon)
+        downloadPillTitle = findViewById(R.id.downloadPillTitle)
+        downloadPillSub = findViewById(R.id.downloadPillSub)
+        downloadPillProgress = findViewById(R.id.downloadPillProgress)
+        setupPillGestures()
+        registerNetworkPill()
         // v2.1.7 (E): the banner follows the download StateFlow (progress is published every ~300 ms,
         // renderDownloadBanner() ignores identical updates).
-        lifecycleScope.launch { core.downloads.downloads.collect { renderDownloadBanner(it) } }
+        lifecycleScope.launch { core.downloads.downloads.collect { renderDownloadBanner(it); onDownloadListChanged(it) } }
         // v2.1.7 (N): while the active session is Incognito, Android keeps one low-priority
         // notification that explains it and can close the session (deleting its profile data).
         lifecycleScope.launch { core.sessions.active.collect { IncognitoNotifier.update(this@BrowserActivity, it) } }
@@ -925,7 +945,17 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
             forceToolbarUrl = null
             if (urlInput.text?.toString() != forced) urlInput.setText(forced)
             // The write is programmatic: it must never look like typing (no suggestion popup).
-            if (::suggestionPopup.isInitialized) suggestionPopup.dismiss()
+        if (::suggestionPopup.isInitialized) suggestionPopup.dismiss()
+        // v2.2.0-beta-3: no pill callbacks outlive the Activity.
+        networkCallback?.let { cb ->
+            try { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(cb) } catch (t: Throwable) { AppLog.w(TAG, "unregister network callback", t) }
+        }
+        networkCallback = null
+        if (::networkPill.isInitialized) {
+            networkPill.removeCallbacks(hideNetworkPill)
+            networkPill.removeCallbacks(networkRecheck)
+        }
+        if (::downloadPill.isInitialized) downloadPill.removeCallbacks(hideDownloadPill)
         } else if (!urlInput.hasFocus()) {
             // Runs on every progress tick: only touch the EditText (layout + text watcher) when the text changed.
             val text = if (tab.isStartPage) "" else tab.url
@@ -992,6 +1022,226 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         }
         if (downloadBanner.text != text) downloadBanner.text = text
         if (!downloadBanner.isVisible) downloadBanner.isVisible = true
+    }
+
+    // ================================================================== transient bottom pills (v2.2.0-beta-3)
+
+    private fun fmtBytes(bytes: Long): String = android.text.format.Formatter.formatFileSize(this, bytes)
+
+    /** Shows the connectivity chip for ~2.5 s (main-thread NetworkCallback deliveries). */
+    private fun showNetworkPill(text: String) {
+        if (!::networkPill.isInitialized) return
+        networkPill.removeCallbacks(hideNetworkPill)
+        networkPill.text = text
+        networkPill.isVisible = true
+        networkPill.animate().cancel()
+        networkPill.alpha = 0f
+        networkPill.translationY = 32f
+        networkPill.animate().alpha(1f).translationY(0f).setDuration(200).start()
+        networkPill.postDelayed(hideNetworkPill, 2500)
+    }
+
+    private val hideNetworkPill = Runnable {
+        if (::networkPill.isInitialized) {
+            networkPill.animate().cancel()
+            networkPill.animate().alpha(0f).translationY(32f)
+                .withEndAction { networkPill.isVisible = false; networkPill.alpha = 1f; networkPill.translationY = 0f }
+                .setDuration(200).start()
+        }
+    }
+
+    /** Registers the default-network callback; only CHANGES after registration are announced, so a
+     *  cold start never spams "Online". */
+    private fun registerNetworkPill() {
+        val cm = getSystemService(ConnectivityManager::class.java)
+        networkAvailable = cm.activeNetwork != null
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                networkPill.removeCallbacks(networkRecheck)
+                if (!networkAvailable) {
+                    networkAvailable = true
+                    showNetworkPill(getString(R.string.net_online))
+                }
+            }
+            override fun onLost(network: Network) {
+                // A Wi-Fi -> data handover fires onLost before the replacement is up: re-check after
+                // a short grace period instead of flashing a false "Offline".
+                networkPill.removeCallbacks(networkRecheck)
+                networkPill.postDelayed(networkRecheck, 700)
+            }
+        }
+        networkCallback = cb
+        try { cm.registerDefaultNetworkCallback(cb) } catch (t: Throwable) { AppLog.w(TAG, "register network callback", t) }
+    }
+
+    private val networkRecheck = Runnable {
+        if (networkCallback == null) return@Runnable
+        val online = getSystemService(ConnectivityManager::class.java).activeNetwork != null
+        if (networkAvailable && !online) showNetworkPill(getString(R.string.net_offline))
+        else if (!networkAvailable && online) showNetworkPill(getString(R.string.net_online))
+        networkAvailable = online
+    }
+
+    /** Drives the 5-second download card from the downloads StateFlow: announces a FRESHLY started
+     *  download and any completion/failure; progress ticks refresh a visible card in place. */
+    private fun onDownloadListChanged(list: List<DownloadEntity>) {
+        val now = System.currentTimeMillis()
+        for (d in list) {
+            val prev = downloadStates[d.id]
+            when {
+                // First sight: only a freshly created transfer (the createdAt guard keeps rotation
+                // or process restore from re-announcing downloads that started long ago).
+                prev == null && DownloadStatus.isActive(d.status) && now - d.createdAt < 6000 ->
+                    showDownloadPill(d, started = true)
+                prev == null -> {}
+                prev != d.status && (d.status == DownloadStatus.COMPLETED || d.status == DownloadStatus.FAILED) ->
+                    showDownloadPill(d, started = false)
+                pillDownloadId == d.id -> updateDownloadPill(d)
+            }
+            downloadStates[d.id] = d.status
+        }
+    }
+
+    private fun showDownloadPill(d: DownloadEntity, started: Boolean) {
+        downloadPill.removeCallbacks(hideDownloadPill)
+        pillDownloadId = d.id
+        downloadPillTitle.text = d.fileName
+        downloadPillIcon.setImageResource(
+            if (started) R.drawable.ic_download
+            else if (d.status == DownloadStatus.COMPLETED) R.drawable.ic_check else R.drawable.ic_error
+        )
+        when {
+            started -> {
+                downloadPillSub.text = getString(R.string.pill_started)
+                downloadPillProgress.isVisible = true
+                if (d.totalBytes > 0) {
+                    downloadPillProgress.isIndeterminate = false
+                    downloadPillProgress.progress = ((d.downloadedBytes * 100) / d.totalBytes).toInt().coerceIn(0, 100)
+                } else downloadPillProgress.isIndeterminate = true
+            }
+            d.status == DownloadStatus.COMPLETED -> {
+                downloadPillSub.text = getString(R.string.pill_done)
+                downloadPillProgress.isVisible = false
+            }
+            else -> {
+                downloadPillSub.text = getString(R.string.pill_failed)
+                downloadPillProgress.isVisible = false
+            }
+        }
+        downloadPill.isVisible = true
+        downloadPill.animate().cancel()
+        downloadPill.alpha = 0f
+        downloadPill.translationY = 48f
+        downloadPill.animate().alpha(1f).translationY(0f).setDuration(220).start()
+        downloadPill.postDelayed(hideDownloadPill, 5000)   // exactly 5 seconds, never permanent
+    }
+
+    /** Live progress for the visible card (no timer restart - the card lives exactly 5 s). */
+    private fun updateDownloadPill(d: DownloadEntity) {
+        if (!downloadPill.isVisible || pillDownloadId != d.id) return
+        when (d.status) {
+            DownloadStatus.RUNNING -> {
+                if (d.totalBytes > 0) {
+                    downloadPillProgress.isIndeterminate = false
+                    downloadPillProgress.progress = ((d.downloadedBytes * 100) / d.totalBytes).toInt().coerceIn(0, 100)
+                    downloadPillSub.text = getString(R.string.dl_size_fmt, fmtBytes(d.downloadedBytes), fmtBytes(d.totalBytes))
+                } else downloadPillProgress.isIndeterminate = true
+            }
+            DownloadStatus.PAUSED -> downloadPillSub.text = getString(R.string.dl_status_paused)
+            else -> showDownloadPill(d, started = false)
+        }
+    }
+
+    private val hideDownloadPill = Runnable { dismissDownloadPill() }
+
+    private fun dismissDownloadPill() {
+        if (!::downloadPill.isInitialized || !downloadPill.isVisible) return
+        downloadPill.removeCallbacks(hideDownloadPill)
+        pillDownloadId = null
+        downloadPill.animate().cancel()
+        downloadPill.animate().alpha(0f).translationY(48f)
+            .withEndAction { downloadPill.isVisible = false; downloadPill.alpha = 1f; downloadPill.translationY = 0f }
+            .setDuration(180).start()
+    }
+
+    private fun openDownloadsFromPill() {
+        dismissDownloadPill()
+        openUrlLauncher.launch(Intent(this, DownloadsActivity::class.java))
+    }
+
+    /**
+     * Gestures (v2.2.0-beta-3):
+     *  - download card: tap or drag DOWN -> open Downloads; drag in ANY other direction past the
+     *    threshold -> dismiss; smaller drags snap back. Auto-hides after 5 s unless held.
+     *  - network chip: drag any direction -> dismiss, otherwise the 2.5 s timer runs.
+     */
+    private fun setupPillGestures() {
+        val density = resources.displayMetrics.density
+        val dismissPx = 96f * density
+        val downPx = 84f * density
+        val chipDismissPx = 40f * density
+        var downX = 0f
+        var downY = 0f
+        var dragging = false
+        downloadPill.setOnTouchListener { v, ev ->
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = ev.rawX; downY = ev.rawY; dragging = false
+                    downloadPill.removeCallbacks(hideDownloadPill)
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = ev.rawX - downX
+                    val dy = ev.rawY - downY
+                    if (!dragging && kotlin.math.hypot(dx.toDouble(), dy.toDouble()) > android.view.ViewConfiguration.get(this).scaledTouchSlop) dragging = true
+                    if (dragging) { v.translationX = dx; v.translationY = dy }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    val dx = ev.rawX - downX
+                    val dy = ev.rawY - downY
+                    v.translationX = 0f; v.translationY = 0f
+                    val dist = kotlin.math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
+                    when {
+                        !dragging -> openDownloadsFromPill()
+                        dy > downPx && dy > 0f -> openDownloadsFromPill()               // drag down = open
+                        dist > dismissPx -> dismissDownloadPill()                       // any other drag = remove
+                        else -> downloadPill.postDelayed(hideDownloadPill, 5000)        // snap back, timer resumes
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+        var chipX = 0f
+        var chipY = 0f
+        var chipDragged = false
+        networkPill.setOnTouchListener { v, ev ->
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    chipX = ev.rawX; chipY = ev.rawY; chipDragged = false
+                    networkPill.removeCallbacks(hideNetworkPill)
+                    v.animate().cancel()
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = ev.rawX - chipX
+                    val dy = ev.rawY - chipY
+                    if (kotlin.math.hypot(dx.toDouble(), dy.toDouble()) > android.view.ViewConfiguration.get(this).scaledTouchSlop) chipDragged = true
+                    if (chipDragged) { v.translationX = dx; v.translationY = dy }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    val moved = chipDragged &&
+                        (kotlin.math.hypot((ev.rawX - chipX).toDouble(), (ev.rawY - chipY).toDouble()) > chipDismissPx)
+                    v.translationX = 0f; v.translationY = 0f
+                    if (moved) { networkPill.removeCallbacks(hideNetworkPill); hideNetworkPill.run() }
+                    else networkPill.postDelayed(hideNetworkPill, 1500)
+                    true
+                }
+                else -> false
+            }
+        }
     }
 
     private fun showIsolationInfo() {

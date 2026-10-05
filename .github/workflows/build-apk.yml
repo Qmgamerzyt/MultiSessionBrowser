@@ -193,40 +193,58 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      # Professional release notes: a stable, hand-written header (version table, install and
-      # verification instructions + a pointer to the maintained Changelog in README.md) plus
-      # GitHub's auto-generated "What's Changed" commit list underneath. Beta tags
-      # (2.2.0-beta-N) are published as GitHub *pre-releases* so they never replace the
-      # latest stable release page.
+      # Professional release notes: the release body is WRITTEN IN the release itself - the exact
+      # "### <version>" section of README.md (what changed, what was fixed) is embedded between the
+      # version table and the install/verification blocks. No "see the README" pointer and no
+      # link-only changelog (user request). Beta tags (2.2.0-beta-N) stay GitHub *pre-releases*.
+      - name: Compose release notes from README (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        id: notes
+        run: |
+          python3 - <<'PYEOF' > "$RUNNER_TEMP/release_body.md"
+          import re, pathlib
+          vn = re.search(r'versionName = "([^"]+)"', pathlib.Path('app/build.gradle.kts').read_text()).group(1)
+          readme = pathlib.Path('README.md').read_text()
+          m = re.search(r'^### %s\s*$' % re.escape(vn), readme, re.M)
+          if m:
+              rest = readme[m.end():]
+              nxt = re.search(r'^### ', rest, re.M)
+              section = (rest[:nxt.start()] if nxt else rest).strip()
+              print('### Changes\n\n' + section)
+          else:
+              print('### Changes\n\n(no changelog entry found for %s - add one under ## Changelog in README.md)' % vn)
+          PYEOF
+          {
+            echo "body<<__MSB_NOTES_EOF__"
+            echo "## MultiSession Browser ${{ steps.version.outputs.version_name }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| **Version** | \`${{ steps.version.outputs.version_name }}\` (versionCode ${{ steps.version.outputs.version_code }}) |"
+            echo "| **Commit** | \`${{ github.sha }}\` |"
+            echo "| **Engine** | Mozilla GeckoView (the Firefox engine) |"
+            echo "| **APKs** | one per ABI - \`arm64-v8a\` (almost every phone) and \`armeabi-v7a\` (older 32-bit devices); the file name carries the version |"
+            echo ""
+            cat "$RUNNER_TEMP/release_body.md"
+            echo ""
+            echo "### Install"
+            echo "1. Download the APK matching your device (in doubt: \`arm64-v8a\`)."
+            echo "2. Open it and allow your file manager to install unknown apps."
+            echo "3. Updating later installs in place - every release is signed with the same pinned key."
+            echo ""
+            echo "### Verification"
+            echo "Each APK is CI-checked before it is published: the signer must match the pinned certificate in"
+            echo "\`signing/pinned-signer.sha256\`, and the packaged GeckoView \`omni.ja\` must carry the project's"
+            echo "per-session cookie patch. Build reproducibility details are in the repository workflow."
+            echo "__MSB_NOTES_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Attach APKs to GitHub Release (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
           name: MultiSessionBrowser ${{ steps.version.outputs.version_name }}
           prerelease: ${{ contains(steps.version.outputs.version_name, 'beta') || contains(steps.version.outputs.version_name, 'alpha') || contains(steps.version.outputs.version_name, 'rc') }}
-          generate_release_notes: true
-          body: |
-            ## MultiSession Browser ${{ steps.version.outputs.version_name }}
-
-            | | |
-            |---|---|
-            | **Version** | `${{ steps.version.outputs.version_name }}` (versionCode ${{ steps.version.outputs.version_code }}) |
-            | **Commit** | `${{ github.sha }}` |
-            | **Engine** | Mozilla GeckoView (the Firefox engine) |
-            | **APKs** | one per ABI — `arm64-v8a` (almost every phone) and `armeabi-v7a` (older 32-bit devices); the file name carries the version |
-
-            ### Highlights
-            See the **Changelog** section of the [README](https://github.com/${{ github.repository }}/blob/main/README.md#changelog) for this version's user-facing changes and the beta-train release policy.
-
-            ### Install
-            1. Download the APK matching your device (in doubt: `arm64-v8a`).
-            2. Open it and allow your file manager to install unknown apps.
-            3. Updating later installs in place — every release is signed with the same pinned key.
-
-            ### Verification
-            Each APK is CI-checked before it is published: the signer must match the pinned certificate in
-            `signing/pinned-signer.sha256`, and the packaged GeckoView `omni.ja` must carry the project's
-            per-session cookie patch. Build reproducibility details are in the repository workflow.
-
+          body: ${{ steps.notes.outputs.body }}
           files: |
             app/build/outputs/apk/release/*.apk

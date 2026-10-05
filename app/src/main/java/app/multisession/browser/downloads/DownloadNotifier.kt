@@ -18,24 +18,20 @@ import app.multisession.browser.data.db.DownloadEntity
 import app.multisession.browser.ui.downloads.DownloadsActivity
 
 /**
- * Android download notifications (v2.1.7, issue E).
+ * Android download notifications.
  *
- * The browser used to report downloads only with a Snackbar that vanished while the app was in the
- * foreground; leaving the app gave no feedback at all. Every state change published by
- * [AppDownloadManager] now also lands here:
+ * v2.2.0-beta-3 (user-requested change): the PERMANENT ongoing progress notification is gone.
+ * While the app is in the foreground the in-app 5-second download card reports start / progress /
+ * result; the system shade now only carries the dismissible states:
  *
- *  - running        -> one ongoing notification per download with a progress bar (indeterminate
- *    while the server did not send a length), Pause + Cancel actions and a tap that opens the
- *    Downloads screen (v2.1.10 A9: Pause lets you stop a transfer without killing it),
- *  - pending        -> the same, Cancel only (nothing to pause before the transfer starts),
- *  - paused           -> the same notification, no longer ongoing, with Resume + Cancel actions
- *    (v2.1.10 A9: Cancel alongside Resume - a paused download could not be discarded from here),
- *  - completed/failed -> replaced by an auto-cancelling result notification (v2.1.10 A9: the
- *    completed one carries Open + Close actions instead of only a tap target),
- *  - cancelled        -> the ongoing notification is simply removed.
+ *  - running/pending -> nothing posted (any lingering ongoing notification from older builds is
+ *    cancelled once per download),
+ *  - paused           -> non-ongoing notification with Resume + Cancel actions,
+ *  - completed/failed -> auto-cancelling result notification with Open + Close actions,
+ *  - cancelled        -> the notification is removed.
  *
- * Two channels: progress is LOW (no sound, no badge, no heads-up) and finished downloads are DEFAULT.
- * Nothing is posted when the app may not post notifications (POST_NOTIFICATIONS on 13+, app toggle).
+ * Two channels remain for the states that still post. Nothing is posted when the app may not post
+ * notifications (POST_NOTIFICATIONS on 13+, app toggle).
  */
 object DownloadNotifier {
 
@@ -74,12 +70,15 @@ object DownloadNotifier {
         }
         if (!canPost(app)) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ensureChannels(app)
-        if (d.status == DownloadStatus.RUNNING) lastSent[d.id] = percent to System.currentTimeMillis()
         val manager = NotificationManagerCompat.from(app)
         val id = d.id.hashCode()
         when (d.status) {
+            // v2.2.0-beta-3: NO permanent progress notification any more - foreground feedback is
+            // the in-app 5-second download card (BrowserActivity.showDownloadPill), announced on
+            // start/result only, never per tick. Cancel-once clears a lingering ongoing
+            // notification posted by older builds so it cannot sit in the shade forever.
             DownloadStatus.PENDING, DownloadStatus.RUNNING ->
-                manager.notify(id, active(app, d, ongoing = true))
+                if (lastSent.put(d.id, percent to System.currentTimeMillis()) == null) manager.cancel(id)
             DownloadStatus.PAUSED ->
                 manager.notify(id, active(app, d, ongoing = false))
             DownloadStatus.COMPLETED -> {

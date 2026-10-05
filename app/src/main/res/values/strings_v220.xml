@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v2.2.0-beta-3: address-bar Execute suggestion, transient bottom pills (network + downloads). -->
+<resources>
+    <string name="suggestion_execute">Execute: %1$s</string>
+
+    <string name="net_online">Online</string>
+    <string name="net_offline">Offline</string>
+
+    <string name="pill_started">Downloading…</string>
+    <string name="pill_done">Completed · tap to open downloads</string>
+    <string name="pill_failed">Failed · tap to open downloads</string>
+</resources>

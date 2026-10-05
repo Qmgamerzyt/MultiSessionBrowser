@@ -136,6 +136,24 @@ Issues and pull requests are welcome.
 Releases follow a **beta train**: while only fixes land, versions increment `2.2.0-beta-1`,
 `2.2.0-beta-2`, …; the next feature wave starts a new minor.
 
+### 2.2.0-beta-3
+- **Fixed — downloads could not be cancelled on a weak network and removed entries came back:**
+  pause/cancel/delete now interrupt the transfer immediately instead of waiting for the stalled
+  connection to return; a download removed from the list can no longer resurrect itself, and a
+  file is never deleted underneath a running transfer (which could leave a "finished" download
+  pointing at nothing — "file does not exist" when opened).
+- **Fixed — address-bar suggestions:** the "Go to" row for a typed host and the new "Execute" row
+  for any `:` input (scheme URLs included) now appear FIRST, so backspacing `https://` off a URL
+  reliably shows the open-as-link suggestion instead of only "Search for".
+- **New — connectivity feedback:** an Online/Offline chip pops up at the bottom edge for ~2.5 s
+  whenever the connection is lost or restored (Chrome-style awareness without the offline page).
+- **Changed — download notifications:** the permanent progress notification is gone. While the app
+  is open a download card slides up from the bottom for exactly 5 seconds (tap or drag down opens
+  the Downloads screen, any other drag dismisses it); the shade keeps only paused and finished
+  notifications.
+- **Changed — release notes:** every GitHub release now states what changed and what was fixed
+  directly in the release body (extracted from this changelog) instead of linking to it.
+
 ### 2.2.0-beta-2
 - **Address bar: any `:` input is executable.** Instead of an ever-growing per-scheme allowlist,
   any typed command/URL containing a colon (`file:`, `http:`, `data:`, `intent:`, `javascript:`, …)

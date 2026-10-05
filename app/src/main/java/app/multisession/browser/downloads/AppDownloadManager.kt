@@ -81,10 +81,26 @@ class AppDownloadManager(private val core: BrowserCore) {
     val downloads: StateFlow<List<DownloadEntity>> = _downloads.asStateFlow()
 
     private val jobs = ConcurrentHashMap<String, Job>()
+    private val activeInputs = ConcurrentHashMap<String, InputStream>()
     private val pauseRequested = ConcurrentHashMap.newKeySet<String>()
     private val cancelRequested = ConcurrentHashMap.newKeySet<String>()
+    /** User removed these entries: any late publish from their still-running job must not resurrect them. */
+    private val deletedIds = ConcurrentHashMap.newKeySet<String>()
+    /** delete(id, deleteFile = false) on a RUNNING transfer: stop it but keep the partial file. */
+    private val keepFileIds = ConcurrentHashMap.newKeySet<String>()
 
     val activeCount: Int get() = _downloads.value.count { DownloadStatus.isActive(it.status) }
+
+    /**
+     * v2.2.0-beta-3: pause/cancel used to be plain flags read BETWEEN reads - a stalled connection
+     * blocked input.read() indefinitely, so the flags were never observed and cancel did nothing
+     * (and a delete()d entry later resurrected when the read finally returned). Closing the body
+     * stream from the control path unblocks read() immediately; the job then classifies the
+     * resulting IOException from the flags.
+     */
+    private fun interrupt(id: String) {
+        activeInputs[id]?.let { s -> try { s.close() } catch (_: Throwable) {} }
+    }
 
     suspend fun load() {
         // Anything that was running when the process died is not running any more: make it resumable.
@@ -123,13 +139,22 @@ class AppDownloadManager(private val core: BrowserCore) {
         val d = get(id) ?: return
         if (!DownloadStatus.isActive(d.status)) return
         pauseRequested.add(id)
+        interrupt(id)   // a blocked read() must return now, not after the network recovers
     }
 
     fun cancel(id: String) {
         val d = get(id) ?: return
-        if (DownloadStatus.isActive(d.status)) { cancelRequested.add(id); return }
-        // Paused: nothing is running -> remove the partial file right away.
-        core.scope.launch(Dispatchers.IO) { deleteFile(d) ; publish(d.copy(status = DownloadStatus.CANCELLED, downloadedBytes = 0, contentUri = null, filePath = null, updatedAt = System.currentTimeMillis())) }
+        if (DownloadStatus.isActive(d.status)) {
+            cancelRequested.add(id)
+            interrupt(id)   // the job deletes the partial file itself once its stream is closed
+            return
+        }
+        // Paused: nothing is running -> remove the partial file right away. Finished states are
+        // deliberately NOT touched: removing a finished entry is delete()'s job, and cancel must
+        // never destroy a completed file (that produced "file does not exist" on open).
+        if (d.status == DownloadStatus.PAUSED) {
+            core.scope.launch(Dispatchers.IO) { deleteFile(d) ; publish(d.copy(status = DownloadStatus.CANCELLED, downloadedBytes = 0, contentUri = null, filePath = null, updatedAt = System.currentTimeMillis())) }
+        }
     }
 
     /** Continues a paused/interrupted download with an HTTP Range request (falls back to a full restart when the server ignores it). */
@@ -164,10 +189,19 @@ class AppDownloadManager(private val core: BrowserCore) {
     /** Removes the history entry; optionally the file too. */
     fun delete(id: String, deleteFile: Boolean) {
         val d = get(id) ?: return
-        if (DownloadStatus.isActive(d.status)) cancelRequested.add(id)
+        deletedIds.add(id)   // tombstone: late publishes from a still-running job are dropped in publish()
+        if (DownloadStatus.isActive(d.status)) {
+            cancelRequested.add(id)
+            if (!deleteFile) keepFileIds.add(id)
+            // The file is NOT deleted here - the job owns the open output. It deletes (or un-pends,
+            // keepFileIds) the file itself after interrupt() closes its stream. Deleting the file
+            // while the job still wrote to it was what left completed entries pointing at nothing.
+            interrupt(id)
+        } else if (deleteFile) {
+            core.scope.launch(Dispatchers.IO) { deleteFile(d) }
+        }
         _downloads.value = _downloads.value.filterNot { it.id == id }
         core.persist { core.repo.downloads.delete(id) }
-        if (deleteFile) core.scope.launch(Dispatchers.IO) { deleteFile(d) }
     }
 
     fun clearFinished() {
@@ -209,6 +243,7 @@ class AppDownloadManager(private val core: BrowserCore) {
 
     private fun publish(d: DownloadEntity) {
         core.scope.launch {   // Main.immediate: safe from any thread
+            if (d.id in deletedIds) return@launch   // v2.2.0-beta-3: a removed entry stays removed
             val cur = _downloads.value
             _downloads.value = if (cur.any { it.id == d.id }) cur.map { if (it.id == d.id) d else it } else listOf(d) + cur
             core.persist { core.repo.downloads.upsert(d) }
@@ -251,22 +286,37 @@ class AppDownloadManager(private val core: BrowserCore) {
     }
 
     private fun runStream(start: DownloadEntity, body: InputStream, append: Boolean) {
-        pauseRequested.remove(start.id); cancelRequested.remove(start.id)
         jobs[start.id] = core.scope.launch(Dispatchers.IO) {
+            // v2.2.0-beta-3: cancel/delete that arrived while the fetch was still in flight (no
+            // stream to interrupt yet) - finish here, before creating an output to throw away.
+            if (cancelRequested.remove(start.id) || deletedIds.contains(start.id)) {
+                finishCancelled(start, start.downloadedBytes)
+                return@launch
+            }
             var d = start.copy(status = DownloadStatus.RUNNING, error = null, updatedAt = System.currentTimeMillis())
             publish(d)
             var out: OutputStream? = null
+            var written = d.downloadedBytes
+            activeInputs[start.id] = body
             try {
                 d = openOutput(d, append)
                 val stream = openStream(d, append)
                 out = stream
                 val buf = ByteArray(128 * 1024)
                 var last = System.currentTimeMillis()
-                var written = d.downloadedBytes
+                written = d.downloadedBytes
                 body.use { input ->
                     while (true) {
-                        if (cancelRequested.remove(d.id)) { stream.close(); out = null; deleteFile(d); publish(d.copy(status = DownloadStatus.CANCELLED, downloadedBytes = 0, contentUri = null, filePath = null, updatedAt = System.currentTimeMillis())); return@launch }
-                        if (pauseRequested.remove(d.id)) { stream.flush(); stream.close(); out = null; publish(d.copy(status = DownloadStatus.PAUSED, downloadedBytes = written, updatedAt = System.currentTimeMillis())); return@launch }
+                        if (cancelRequested.remove(d.id) || deletedIds.contains(d.id)) {
+                            stream.close(); out = null
+                            finishCancelled(d, written)
+                            return@launch
+                        }
+                        if (pauseRequested.remove(d.id)) {
+                            stream.flush(); stream.close(); out = null
+                            publish(d.copy(status = DownloadStatus.PAUSED, downloadedBytes = written, updatedAt = System.currentTimeMillis()))
+                            return@launch
+                        }
                         val n = input.read(buf)
                         if (n < 0) break
                         stream.write(buf, 0, n)
@@ -280,13 +330,44 @@ class AppDownloadManager(private val core: BrowserCore) {
                 publish(d.copy(status = DownloadStatus.COMPLETED, updatedAt = System.currentTimeMillis()))
                 AppLog.i(TAG, "Download complete ${d.fileName} ($written bytes)")
             } catch (t: Throwable) {
-                AppLog.e(TAG, "Download failed ${d.fileName}", t)
+                // interrupt() closes the blocked read() from pause/cancel/delete: classify by flags
+                val cancelled = cancelRequested.remove(d.id) || deletedIds.contains(start.id)
+                val paused = !cancelled && pauseRequested.remove(d.id)
+                try { out?.flush() } catch (_: Throwable) {}
                 try { out?.close() } catch (_: Throwable) {}
-                publish(d.copy(status = DownloadStatus.PAUSED.takeIf { d.downloadedBytes > 0 && d.url.startsWith("http") } ?: DownloadStatus.FAILED,
-                    error = t.message ?: "I/O error", updatedAt = System.currentTimeMillis()))
+                out = null
+                when {
+                    cancelled -> finishCancelled(d, written)
+                    paused -> publish(d.copy(status = DownloadStatus.PAUSED, downloadedBytes = written, updatedAt = System.currentTimeMillis()))
+                    else -> {
+                        AppLog.e(TAG, "Download failed ${d.fileName}", t)
+                        publish(d.copy(status = DownloadStatus.PAUSED.takeIf { written > 0 && d.url.startsWith("http") } ?: DownloadStatus.FAILED,
+                            error = t.message ?: "I/O error", updatedAt = System.currentTimeMillis()))
+                    }
+                }
             } finally {
+                activeInputs.remove(start.id)
                 jobs.remove(start.id)
             }
+        }
+    }
+
+    /**
+     * Terminal cancel path (observed in the loop or in the interrupted catch): honours keepFileIds
+     * (entry removed but the partial file stays, un-pended so it is visible) or deletes the partial,
+     * then publishes CANCELLED - which publish() drops for tombstoned (user-removed) entries.
+     */
+    private fun finishCancelled(d: DownloadEntity, written: Long) {
+        if (keepFileIds.remove(d.id)) {
+            d.contentUri?.let { u ->
+                try {
+                    core.app.contentResolver.update(Uri.parse(u), ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
+                } catch (_: Throwable) {}
+            }
+            publish(d.copy(status = DownloadStatus.CANCELLED, downloadedBytes = written, updatedAt = System.currentTimeMillis()))
+        } else {
+            deleteFile(d)
+            publish(d.copy(status = DownloadStatus.CANCELLED, downloadedBytes = 0, contentUri = null, filePath = null, updatedAt = System.currentTimeMillis()))
         }
     }
 
