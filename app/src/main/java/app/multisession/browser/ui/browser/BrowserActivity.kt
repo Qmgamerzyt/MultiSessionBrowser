@@ -277,7 +277,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         // Tap on a website notification: bring the browser up and report the click to the page.
         intent.getStringExtra(WebNotifications.EXTRA_TAG)?.let { tag -> core.engine.notifications.click(tag); return }
         // Library/editor screens deliver a URL to open (the SimpleListActivity result contract,
-        // also sent by intent in v2.1.10 Plan 3 so the editor preview stays on the back stack).
+        // also sent by intent in v2.1.10 Plan 3 by the editor's Preview action).
         intent.getStringExtra(SimpleListActivity.EXTRA_OPEN_URL)?.let { url ->
             openUrl(url, intent.getBooleanExtra(SimpleListActivity.EXTRA_IN_NEW_TAB, false))
             return

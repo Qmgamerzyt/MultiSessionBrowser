@@ -40,7 +40,9 @@ import org.json.JSONObject
  * bridges it to disk through [EditorBridge] (`window.Bridge`). The native side owns the file
  * tree drawer, the flush points (Preview / back), and rotation state; the JS side owns the
  * 800 ms autosave debounce. Preview delivers [SimpleListActivity.EXTRA_OPEN_URL] to
- * [BrowserActivity] so the browser opens the page while the editor stays on the back stack.
+ * [BrowserActivity] so the browser opens the page; BrowserActivity is singleTask, which
+ * clears the editor (and the projects screen) from the task — edits are already flushed,
+ * and back-from-browser matches the pre-existing open-from-projects flow.
  */
 class EditorActivity : AppCompatActivity() {
 
@@ -128,7 +130,7 @@ class EditorActivity : AppCompatActivity() {
         else -> super.onOptionsItemSelected(item)
     }
 
-    /** Flush, then hand the project URL to the browser; this activity stays on the back stack. */
+    /** Flush, then hand the project URL to the browser (singleTask clears the editor; edits are persisted). */
     private fun preview() {
         webView.evaluateJavascript("flushSave()") {
             val p = project ?: return@evaluateJavascript
