@@ -113,10 +113,10 @@ fun installErrorMessage(context: Context, t: Throwable): String {
  *    exactly one session's jar. Isolation is untouched: CookieStorage looks cookies up by a hash that includes
  *    mGeckoViewSessionContextId, so a wrong or missing context matches NOTHING rather than another session's jar.
  *    The committed asset is re-hashed out of every built APK in CI, so a bad asset merge fails the run instead of
- *    silently shipping broken cookies. See docs/EXTENSIONS.md for the two remaining documented limitations
+ *    silently shipping broken cookies. Two further documented limitations remain
  *    (an add-on must pass storeId explicitly; getAllCookieStores() can enumerate every session's store).
  *
- * Documented limitations (Android/GeckoView architecture, not app bugs - see docs/EXTENSIONS.md):
+ * Documented limitations (Android/GeckoView architecture, not app bugs):
  *  - Extensions are runtime-wide. Their storage (browser.storage) and background pages are NOT partitioned by our
  *    browser sessions (contextId); an extension can see tabs of every session (browser.tabs). There is no per-session
  *    enable/disable in GeckoView.

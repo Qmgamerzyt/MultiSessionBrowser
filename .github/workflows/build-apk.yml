@@ -59,7 +59,6 @@ jobs:
       # throwaway debug key (a fresh one per runner) and NO update could ever install over the
       # previous one: Android rejects differing signers with INSTALL_FAILED_UPDATE_INCOMPATIBLE.
       # Runs before ANY build so both debug and release APKs sign with the same key.
-      # See BUGFIX_UPDATE_SIGNATURE.md for the evidence from all shipped releases.
       - name: Decode release keystore (required)
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -148,7 +147,6 @@ jobs:
 
       # Guarantees "updates install in place": every APK must carry the ONE pinned signing certificate.
       # A mismatch means a future update would be rejected by Android (signatures do not match), so the
-      # run fails BEFORE anything is uploaded or attached. See BUGFIX_UPDATE_SIGNATURE.md.
       - name: Verify APK signer against the pinned certificate
         shell: bash
         run: |
@@ -177,7 +175,6 @@ jobs:
       # deleted ("usage is recalculated every 6-12 hours"), and free accounts only get 500MB. A quota
       # rejection must NOT fail the job: release APKs are still delivered via GitHub Release assets
       # (a separate storage pool, see the "Attach APKs to GitHub Release" step), and retention-days: 1
-      # keeps artifacts from ever filling the 500MB pool again. See BUGFIX_ARTIFACT_QUOTA.md.
       - name: Upload debug APKs
         uses: actions/upload-artifact@v4
         continue-on-error: true
@@ -196,13 +193,40 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      # Professional release notes: a stable, hand-written header (version table, install and
+      # verification instructions + a pointer to the maintained Changelog in README.md) plus
+      # GitHub's auto-generated "What's Changed" commit list underneath. Beta tags
+      # (2.2.0-beta-N) are published as GitHub *pre-releases* so they never replace the
+      # latest stable release page.
       - name: Attach APKs to GitHub Release (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
           name: MultiSessionBrowser ${{ steps.version.outputs.version_name }}
+          prerelease: ${{ contains(steps.version.outputs.version_name, 'beta') || contains(steps.version.outputs.version_name, 'alpha') || contains(steps.version.outputs.version_name, 'rc') }}
+          generate_release_notes: true
           body: |
-            versionName ${{ steps.version.outputs.version_name }} (versionCode ${{ steps.version.outputs.version_code }}), built from commit ${{ github.sha }}.
-            One APK per ABI (arm64-v8a / armeabi-v7a); the file name contains the version.
+            ## MultiSession Browser ${{ steps.version.outputs.version_name }}
+
+            | | |
+            |---|---|
+            | **Version** | `${{ steps.version.outputs.version_name }}` (versionCode ${{ steps.version.outputs.version_code }}) |
+            | **Commit** | `${{ github.sha }}` |
+            | **Engine** | Mozilla GeckoView (the Firefox engine) |
+            | **APKs** | one per ABI — `arm64-v8a` (almost every phone) and `armeabi-v7a` (older 32-bit devices); the file name carries the version |
+
+            ### Highlights
+            See the **Changelog** section of the [README](https://github.com/${{ github.repository }}/blob/main/README.md#changelog) for this version's user-facing changes and the beta-train release policy.
+
+            ### Install
+            1. Download the APK matching your device (in doubt: `arm64-v8a`).
+            2. Open it and allow your file manager to install unknown apps.
+            3. Updating later installs in place — every release is signed with the same pinned key.
+
+            ### Verification
+            Each APK is CI-checked before it is published: the signer must match the pinned certificate in
+            `signing/pinned-signer.sha256`, and the packaged GeckoView `omni.ja` must carry the project's
+            per-session cookie patch. Build reproducibility details are in the repository workflow.
+
           files: |
             app/build/outputs/apk/release/*.apk

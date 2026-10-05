@@ -10,7 +10,8 @@ plugins {
 // To update: change this string to a version listed at
 //   https://maven.mozilla.org/?prefix=maven2/org/mozilla/geckoview/geckoview/
 // then re-check its POM for transitive minimums (Kotlin / androidx.core / compileSdk), see
-// docs/GECKOVIEW_MIGRATION.md. Never use a dynamic range (155.+): pin the exact build id.
+app/build.gradle.kts -> geckoViewVersion (see the Toolchain table in README.md).
+// Never use a dynamic range (155.+): pin the exact build id.
 // ---------------------------------------------------------------------------------------------
 val geckoViewVersion = "155.0.20260903215306"
 
@@ -28,8 +29,8 @@ android {
         applicationId = "app.multisession.browser"
         minSdk = 28                 // Android 9 (Pie). GeckoView >= 144 itself needs 26.
         targetSdk = 35
-        versionCode = 18
-        versionName = "2.1.10"
+        versionCode = 19
+        versionName = "2.2.0-beta-1"
         vectorDrawables.useSupportLibrary = true
     }
 
@@ -51,7 +52,6 @@ android {
     // CI fails the run when the keystore secret is missing AND re-verifies every built APK's certificate
     // against signing/pinned-signer.sha256, so a drifting key can never ship. Local builds without the
     // env vars fall back to the default debug key (dev-only, never released).
-    // See BUGFIX_UPDATE_SIGNATURE.md for the evidence that all pre-2.1.4 builds used throwaway keys.
     signingConfigs {
         create("release") {
             val ksPath = System.getenv("KEYSTORE_FILE")

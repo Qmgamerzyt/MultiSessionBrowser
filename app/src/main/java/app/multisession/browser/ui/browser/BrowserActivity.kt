@@ -541,7 +541,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
      * Leaves search mode explicitly: hides suggestions and the keyboard and parks focus on the
      * invisible holder so the framework cannot hand it back to the EditText.
      */
-    /** TEMPORARY (2.1.4, see BUGFIX_TABSSHEET_CRASH.md): posts the stack trace captured by BrowserApp's
+    /** TEMPORARY (2.1.4): posts the stack trace captured by BrowserApp's
      *  exception handler after the previous process crashed as a notification with Copy/Share actions,
      *  so the exact throwing frame can be reported without adb. Purely observational - the trace file
      *  is consumed once Android accepts the notification (the old dialog consumed it on display); the
@@ -1516,7 +1516,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     /**
      * AMO add-on page -> install through the official API. The site's own button relies on
      * `navigator.mozAddonManager`, which GeckoView only exposes on addons.mozilla.org top-level
-     * content under additional conditions (see docs/EXTENSIONS.md), so it can render disabled here.
+     * content under additional conditions, so it can render disabled here.
      * The .xpi still goes through Gecko's normal install path: signature validation is untouched.
      */
     private fun installAmoFromPage(slug: String) {

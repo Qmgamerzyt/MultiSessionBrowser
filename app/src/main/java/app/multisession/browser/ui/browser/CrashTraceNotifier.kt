@@ -17,7 +17,7 @@ import app.multisession.browser.R
  * Crash-trace notification (2.1.4): replaces the former "screenshot this dialog" screen. The trace is
  * written by BrowserApp's uncaught-exception handler (filesDir/crash_trace.txt) and posted here on the
  * next launch with **Copy** and **Share** actions, so the exact throwing frame can be reported without
- * adb (BUGFIX_TABSSHEET_CRASH.md). The text is embedded in the action intents, so Copy/Share keep
+ * adb. The text is embedded in the action intents, so Copy/Share keep
  * working even after the process is killed; the file is consumed when Android accepts the notification,
  * exactly as the dialog consumed it on display. If notifications cannot be posted the caller keeps the
  * file and retries on the next launch - never a dialog.

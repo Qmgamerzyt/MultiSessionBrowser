@@ -17,3 +17,6 @@
 !gradle/wrapper/gradle-wrapper.jar
 __pycache__/
 *.pyc
+/ignore/
+/.superpowers/
+__pycache__/

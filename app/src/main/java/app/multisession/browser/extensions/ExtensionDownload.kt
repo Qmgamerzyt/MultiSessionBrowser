@@ -131,7 +131,7 @@ private class Target(
  *    `Download.update`, and `STATE_COMPLETE` / `STATE_INTERRUPTED` reported at the end so the
  *    add-on's `downloads.onChanged` fires.
  *
- * Known, documented limits (docs/EXTENSIONS.md): `saveAs` shows no file chooser (there is no UI
+ * Known, documented limits: `saveAs` shows no file chooser (there is no UI
  * attached to a background script), and `downloads.pause` / `downloads.remove` issued *by* the
  * add-on are not observable - `Download.setDelegate` is package-private in GeckoView, so only our
  * own state transitions can be reported.

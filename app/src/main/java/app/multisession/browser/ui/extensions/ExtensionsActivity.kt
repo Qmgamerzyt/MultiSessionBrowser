@@ -170,7 +170,7 @@ class ExtensionsActivity : AppCompatActivity(), ExtensionHost {
     // ================================================================== ExtensionHost
     // This screen owns the extension UI while it is open, so it must answer the prompts Gecko
     // raises for installs started here. browserAction popups and tabs an extension creates are not
-    // offered on this management screen - see docs/EXTENSIONS.md.
+    // offered on this management screen.
 
     override fun onExtensionInstallPrompt(ext: WebExtension, permissions: List<String>, origins: List<String>, dataCollection: List<String>, onDecision: (Boolean) -> Unit) {
         var decided = false
