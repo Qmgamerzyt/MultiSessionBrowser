@@ -96,6 +96,8 @@ class TabManager(private val core: BrowserCore) {
 
     fun countFor(sessionId: String): Int = tabs.values.count { it.sessionId == sessionId && !it.archived }
     fun archivedCountFor(sessionId: String): Int = tabs.values.count { it.sessionId == sessionId && it.archived }
+    /** Every in-memory tab of every session (init diagnostics report, v2.2.0-beta-1). */
+    fun countAll(): Int = tabs.size
 
     fun activeTab(sessionId: String): Tab? {
         val preferred = get(core.sessions.get(sessionId)?.activeTabId)?.takeIf { it.sessionId == sessionId && !it.archived }

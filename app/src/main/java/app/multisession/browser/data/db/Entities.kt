@@ -58,6 +58,34 @@ data class TabEntity(
     val archivedAt: Long? = null,
 )
 
+/**
+ * Projection of a tab row WITHOUT `sessionState` (v2.2.0-beta-1 restore fix): the state JSON can
+ * grow past the Android cursor-window limit (~2 MB per row), and mapping such a row used to throw
+ * inside the one `getAll()` that feeds the whole restore - zeroing every tab while sessions,
+ * history and cookies kept working. [app.multisession.browser.core.BrowserCore] falls back to this
+ * projection and then reads each row's state individually ([TabDao.stateOf]), so only the single
+ * unreadable blob is skipped and its tab still comes back at its URL.
+ */
+data class TabRowLite(
+    val id: String,
+    val sessionId: String,
+    val url: String,
+    val title: String,
+    val position: Int,
+    val createdAt: Long,
+    val lastActiveAt: Long,
+    val desktopMode: Boolean,
+    val groupId: String?,
+    val pinned: Boolean,
+    val archived: Boolean,
+    val archivedAt: Long?,
+) {
+    fun toEntity(sessionState: String?) = TabEntity(
+        id, sessionId, url, title, position, createdAt, lastActiveAt, desktopMode,
+        sessionState, groupId, pinned, archived, archivedAt,
+    )
+}
+
 /** Chrome-style tab group inside one browser session. Groups live independently of their tabs: an empty group is kept. Added in DB v4. */
 @Entity(
     tableName = "tab_groups",

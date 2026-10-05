@@ -51,7 +51,7 @@ class TabSnapshot(
 ) {
     fun toEntity() = TabEntity(
         id, sessionId, url, title, position, createdAt, lastActiveAt, desktopMode,
-        sessionState = if (isStartPage) null else state?.toString(),
+        sessionState = if (isStartPage) null else safeState(state),
         groupId = groupId,
         pinned = pinned,
         archived = archived,
@@ -59,7 +59,26 @@ class TabSnapshot(
     )
 
     /** The serialised Gecko state alone (used for closed-tab history and workspaces). */
-    fun stateJson(): String? = if (isStartPage) null else state?.toString()
+    fun stateJson(): String? = if (isStartPage) null else safeState(state)
+
+    companion object {
+        /**
+         * v2.2.0-beta-1: Android cannot hold a single cursor row larger than ~2 MB, and a very long
+         * history / big form state serialises past that. Writing such a state used to poison the
+         * next start: reading it back threw and the failed restore zeroed the whole tab grid.
+         * Past this cap the tab is persisted WITHOUT page state (it still comes back at its URL).
+         */
+        const val MAX_STATE_CHARS = 1_500_000
+
+        fun safeState(state: GeckoSession.SessionState?): String? {
+            val json = state?.toString() ?: return null
+            if (json.length > MAX_STATE_CHARS) {
+                AppLog.w("Tab", "sessionState too large (${json.length} chars) - persisting the tab without page state")
+                return null
+            }
+            return json
+        }
+    }
 }
 
 /**

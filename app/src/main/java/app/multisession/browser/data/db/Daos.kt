@@ -47,6 +47,20 @@ interface TabDao {
     @Query("SELECT * FROM tabs ORDER BY position ASC")
     suspend fun getAll(): List<TabEntity>
 
+    /**
+     * Restore fallback (v2.2.0-beta-1): every column EXCEPT `sessionState`. One row whose state
+     * JSON exceeds the cursor-window limit must never fail the read of all other tabs.
+     */
+    @Query(
+        "SELECT id, sessionId, url, title, position, createdAt, lastActiveAt, desktopMode, " +
+            "groupId, pinned, archived, archivedAt FROM tabs ORDER BY position ASC"
+    )
+    suspend fun getAllLite(): List<TabRowLite>
+
+    /** Per-row state fetch for the fallback restore: an oversized blob throws here alone, never during the bulk read. */
+    @Query("SELECT sessionState FROM tabs WHERE id = :id")
+    suspend fun stateOf(id: String): String?
+
     @Upsert
     suspend fun upsert(tab: TabEntity)
 

@@ -137,6 +137,13 @@ Releases follow a **beta train**: while only fixes land, versions increment `2.2
 `2.2.0-beta-2`, …; the next feature wave starts a new minor.
 
 ### 2.2.0-beta-1
+- **Critical fix — tabs disappearing after a restart:** app start-up is now fault-isolated per
+  data source, so a single unreadable database row can no longer zero the tab grid, skip
+  extension start-up, or leave the session half-restored while cookies and history keep working.
+  Oversized page-state blobs are capped when written and re-read row-by-row on restore; every
+  launch records a status report (`init_status.txt`) and surfaces any failure through the
+  existing Copy/Share "Crash captured" notification, so the exact stack can be reported straight
+  from the phone.
 - **In-app HTML project editor:** CodeMirror 5 (syntax highlighting, line numbers, Ctrl/Cmd-F find),
   project file tree with create/rename/delete, 800 ms debounced autosave with flush-on-preview/back,
   read-only `project.json`, UTF-8/2 MB/extension allowlist enforcement, and two entry points —
