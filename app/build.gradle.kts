@@ -10,8 +10,7 @@ plugins {
 // To update: change this string to a version listed at
 //   https://maven.mozilla.org/?prefix=maven2/org/mozilla/geckoview/geckoview/
 // then re-check its POM for transitive minimums (Kotlin / androidx.core / compileSdk), see
-app/build.gradle.kts -> geckoViewVersion (see the Toolchain table in README.md).
-// Never use a dynamic range (155.+): pin the exact build id.
+// the Toolchain table in README.md. Never use a dynamic range (155.+): pin the exact build id.
 // ---------------------------------------------------------------------------------------------
 val geckoViewVersion = "155.0.20260903215306"
 
