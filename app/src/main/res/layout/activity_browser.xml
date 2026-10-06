@@ -87,17 +87,29 @@
                     <!-- v2.1.7: Home navigates the current tab to the configured homepage / start page
                          (never creates a tab, never steals focus - see BrowserActivity). -->
                     <ImageButton android:id="@+id/homeButton" style="@style/CompactBarButton" android:contentDescription="@string/home" android:src="@drawable/ic_home" />
+                <!-- v2.2.0-beta-5: the middle cell stays flexible (name centered) while the name
+                     itself wraps its text - so the connection-quality BORDER (green <=1 s,
+                     yellow <=5 s, red >5 s, none = no internet) hugs the text, not the cell. -->
+                <FrameLayout
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1">
                     <TextView
                         android:id="@+id/sessionName"
-                        android:layout_width="0dp"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
+                        android:layout_gravity="center"
                         android:ellipsize="end"
                         android:gravity="center"
-                        android:singleLine="true"
+                        android:maxLines="1"
+                        android:paddingStart="10dp"
+                        android:paddingTop="3dp"
+                        android:paddingEnd="10dp"
+                        android:paddingBottom="3dp"
                         android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="12sp"
                         android:textStyle="bold" />
+                </FrameLayout>
 
                     <ImageButton android:id="@+id/newTabButton" style="@style/CompactBarButton" android:contentDescription="@string/new_tab" android:src="@drawable/ic_add" />
 
@@ -228,29 +240,12 @@
             </FrameLayout>
         </LinearLayout>
 
-        <!-- v2.2.0-beta-4: transient overlays (children of the Coordinator, so they float above
-             the chrome). downloadPill = 5-second download card at the TOP: tap or drag DOWN opens
+        <!-- v2.2.0-beta-5: transient top overlay (child of the Coordinator, so it floats above the
+             chrome). downloadPill = 5-second download card at the TOP: tap or drag DOWN opens
              Downloads, any other drag dismisses, completed cards expose an Open button; a queued
-             chain shows simultaneous start/result events one after another.
-             networkPill = connectivity chip at the BOTTOM (~2.5 s, drag to dismiss) - see
-             BrowserActivity.showNetworkPill / showDownloadPill. -->
-        <TextView
-            android:id="@+id/networkPill"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="bottom|center_horizontal"
-            android:layout_marginBottom="104dp"
-            android:background="@drawable/bg_pill"
-            android:elevation="10dp"
-            android:paddingStart="22dp"
-            android:paddingTop="11dp"
-            android:paddingEnd="22dp"
-            android:paddingBottom="11dp"
-            android:textColor="@android:color/white"
-            android:textSize="14sp"
-            android:textStyle="bold"
-            android:visibility="gone" />
-
+             chain shows simultaneous start/result events one after another. (The Online/Offline
+             popup is gone - connectivity lives in the session-name border - see BrowserActivity
+             registerConnectivity / showDownloadPill.) -->
         <LinearLayout
             android:id="@+id/downloadPill"
             android:layout_width="match_parent"

@@ -148,17 +148,36 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     private lateinit var appMenu: AppMenu
     private lateinit var fullscreenExit: FullscreenExitButton
     private lateinit var homeButton: ImageButton
-    // v2.2.0-beta-4: transient pills (connectivity chip at the bottom, download card at the top).
-    private lateinit var networkPill: TextView
+    // v2.2.0-beta-5: transient top download card + session-name connectivity border.
     private lateinit var downloadPill: View
     private lateinit var downloadPillIcon: ImageView
     private lateinit var downloadPillTitle: TextView
     private lateinit var downloadPillSub: TextView
     private lateinit var downloadPillProgress: ProgressBar
     private lateinit var downloadPillOpen: TextView
-    /** Last connectivity state ANNOUNCED to the chip: null = nothing shown yet (cold start stays silent). */
+    /** Current connectivity (true = a default network exists); drives the session-name border. */
     private var lastNetOnline: Boolean? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    /** Main-thread delivery for the connectivity callback (the no-handler overload delivered on
+     *  the system's HandlerThread - crash: CalledFromWrongThreadException). */
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    /** Bumped on every connectivity change; drops probe results that raced with a change. */
+    private var connGen = 0
+    /** The border drawable kept on [sessionName]; only its stroke color changes. */
+    private var connBorder: android.graphics.drawable.GradientDrawable? = null
+    /** Latency classes for the border: <=1 s good, <=5 s fair, >5 s poor, none = no internet. */
+    private val colorGood = android.graphics.Color.parseColor("#22C55E")
+    private val colorFair = android.graphics.Color.parseColor("#EAB308")
+    private val colorPoor = android.graphics.Color.parseColor("#EF4444")
+    private val colorNone = android.graphics.Color.TRANSPARENT
+    private var connExecutor: java.util.concurrent.ExecutorService? = java.util.concurrent.Executors.newSingleThreadExecutor()
+    /** 30 s refresh while the network is up (re-posts itself only when still online). */
+    private val periodicConnProbe = Runnable {
+        if (lastNetOnline == true) {
+            probeConnectivity()
+            mainHandler.postDelayed(periodicConnProbe, 30_000)
+        }
+    }
     private val downloadStates = HashMap<String, Int>()
     private var pillDownloadId: String? = null
     /** (entity, started) events waiting for the card: one per download, latest state wins. */
@@ -366,6 +385,17 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         // v2.1.7 (N): never leave the Incognito notification behind when the task is gone for good.
         // A configuration change does not finish the Activity, so the notification survives rotation.
         if (isFinishing) IncognitoNotifier.cancel(this)
+        // v2.2.0-beta-5: connectivity probe + pills. (These cleanups used to live INSIDE
+        // updateToolbar by mistake - they fired on the first navigation and killed the
+        // connectivity indicator after any URL load.)
+        networkCallback?.let { cb ->
+            try { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(cb) } catch (t: Throwable) { AppLog.w(TAG, "unregister connectivity callback", t) }
+        }
+        networkCallback = null
+        mainHandler.removeCallbacks(periodicConnProbe)
+        connExecutor?.shutdown()
+        connExecutor = null
+        if (::downloadPill.isInitialized) downloadPill.removeCallbacks(hideDownloadPill)
         super.onDestroy()
     }
 
@@ -391,7 +421,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         reloadStopButton = findViewById(R.id.reloadStopButton)
         progressBar = findViewById(R.id.progressBar)
         webContainer = findViewById(R.id.webContainer)
-        networkPill = findViewById(R.id.networkPill)
         downloadPill = findViewById(R.id.downloadPill)
         downloadPillIcon = findViewById(R.id.downloadPillIcon)
         downloadPillTitle = findViewById(R.id.downloadPillTitle)
@@ -400,7 +429,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         downloadPillOpen = findViewById(R.id.downloadPillOpen)
         downloadPillOpen.setOnClickListener { openDownloadedFile() }
         setupPillGestures()
-        registerNetworkPill()
+        registerConnectivity()
         lifecycleScope.launch { core.downloads.downloads.collect { onDownloadListChanged(it) } }
         // v2.1.7 (N): while the active session is Incognito, Android keeps one low-priority
         // notification that explains it and can close the session (deleting its profile data).
@@ -953,16 +982,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
             if (urlInput.text?.toString() != forced) urlInput.setText(forced)
             // The write is programmatic: it must never look like typing (no suggestion popup).
         if (::suggestionPopup.isInitialized) suggestionPopup.dismiss()
-        // v2.2.0-beta-3: no pill callbacks outlive the Activity.
-        networkCallback?.let { cb ->
-            try { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(cb) } catch (t: Throwable) { AppLog.w(TAG, "unregister network callback", t) }
-        }
-        networkCallback = null
-        if (::networkPill.isInitialized) {
-            networkPill.removeCallbacks(hideNetworkPill)
-            networkPill.removeCallbacks(networkRecheck)
-        }
-        if (::downloadPill.isInitialized) downloadPill.removeCallbacks(hideDownloadPill)
         } else if (!urlInput.hasFocus()) {
             // Runs on every progress tick: only touch the EditText (layout + text watcher) when the text changed.
             val text = if (tab.isStartPage) "" else tab.url
@@ -1011,67 +1030,95 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         isolationBanner.isVisible = !core.isolation.isIsolated && !inFullScreen && !toolbarHidden
     }
 
-    // ================================================================== transient pills (v2.2.0-beta-4)
+    // ================================================================== connectivity border + download card (v2.2.0-beta-5)
 
     private fun fmtBytes(bytes: Long): String = android.text.format.Formatter.formatFileSize(this, bytes)
 
-    /** Shows the connectivity chip for ~2.5 s (main-thread NetworkCallback deliveries). */
-    private fun showNetworkPill(text: String) {
-        if (!::networkPill.isInitialized) return
-        networkPill.removeCallbacks(hideNetworkPill)
-        networkPill.text = text
-        networkPill.isVisible = true
-        networkPill.animate().cancel()
-        networkPill.alpha = 0f
-        networkPill.translationY = 32f
-        networkPill.animate().alpha(1f).translationY(0f).setDuration(200).start()
-        networkPill.postDelayed(hideNetworkPill, 2500)
-    }
+    /** generate_204 probes in order; first reachable host measures the round trip. */
+    private val connProbeUrls = listOf(
+        "https://cp.cloudflare.com/generate_204",
+        "https://connectivitycheck.gstatic.com/generate_204",
+        "https://www.msftconnecttest.com/connecttest.txt",
+    )
 
-    private val hideNetworkPill = Runnable {
-        if (::networkPill.isInitialized) {
-            networkPill.animate().cancel()
-            networkPill.animate().alpha(0f).translationY(32f)
-                .withEndAction { networkPill.isVisible = false; networkPill.alpha = 1f; networkPill.translationY = 0f }
-                .setDuration(200).start()
+    /**
+     * v2.2.0-beta-5: connection quality as the BORDER of the header session name (replaces the
+     * Online/Offline popup): green <= 1000 ms, yellow <= 5000 ms, red > 5000 ms (a real response,
+     * just slow), NONE when there is no usable internet - data/Wi-Fi "on" but probes fail.
+     *
+     * Re-probes on every connectivity change plus a 30 s refresh while up. The callback is
+     * registered with an EXPLICIT main-thread Handler: the no-handler overload delivered on the
+     * system's internal HandlerThread and touching views there crashed
+     * (CalledFromWrongThreadException when the internet was closed).
+     */
+    private fun registerConnectivity() {
+        val border = android.graphics.drawable.GradientDrawable().apply {
+            cornerRadius = 6f * resources.displayMetrics.density
+            setColor(android.graphics.Color.TRANSPARENT)
+            setStroke((2f * resources.displayMetrics.density).toInt().coerceAtLeast(2), android.graphics.Color.TRANSPARENT)
         }
-    }
-
-    /** Registers the default-network callback; every CHANGE is announced IMMEDIATELY (v2.2.0-beta-4:
-     *  the old700 ms-debounced recheck was cancelled by a fast onAvailable before it ever showed
-     *  "Offline", so quick toggles displayed nothing at all). The delayed recheck now only recovers
-     *  a Wi-Fi -> data handover (Offline flashed -> back Online). Cold start stays silent. */
-    private fun registerNetworkPill() {
+        connBorder = border
+        sessionName.background = border
         val cm = getSystemService(ConnectivityManager::class.java)
         lastNetOnline = cm.activeNetwork != null
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                networkPill.removeCallbacks(networkRecheck)
-                if (lastNetOnline != true) {
-                    lastNetOnline = true
-                    showNetworkPill(getString(R.string.net_online))
-                }
+                lastNetOnline = true
+                connGen++
+                probeConnectivity()
+                mainHandler.removeCallbacks(periodicConnProbe)
+                mainHandler.postDelayed(periodicConnProbe, 30_000)
             }
             override fun onLost(network: Network) {
-                if (lastNetOnline != false) {
-                    lastNetOnline = false
-                    showNetworkPill(getString(R.string.net_offline))
-                }
-                networkPill.removeCallbacks(networkRecheck)
-                networkPill.postDelayed(networkRecheck, 700)
+                lastNetOnline = false
+                connGen++          // drops any probe still in flight
+                mainHandler.removeCallbacks(periodicConnProbe)
+                applyConnColor(colorNone)
             }
         }
         networkCallback = cb
-        try { cm.registerDefaultNetworkCallback(cb) } catch (t: Throwable) { AppLog.w(TAG, "register network callback", t) }
+        try { cm.registerDefaultNetworkCallback(cb, mainHandler) } catch (t: Throwable) { AppLog.w(TAG, "register connectivity callback", t) }
+        if (lastNetOnline == true) {
+            probeConnectivity()
+            mainHandler.postDelayed(periodicConnProbe, 30_000)
+        }
     }
 
-    private val networkRecheck = Runnable {
-        if (networkCallback == null) return@Runnable
-        val online = getSystemService(ConnectivityManager::class.java).activeNetwork != null
-        if (online && lastNetOnline == false) {
-            lastNetOnline = true
-            showNetworkPill(getString(R.string.net_online))
+    /** Latency probe on [connExecutor]; the result comes back on [mainHandler], stale drops. */
+    private fun probeConnectivity() {
+        val ex = connExecutor ?: return
+        val gen = connGen
+        ex.execute {
+            var ms = -1L
+            for (url in connProbeUrls) {
+                val t0 = System.currentTimeMillis()
+                try {
+                    val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                    c.connectTimeout = 8000
+                    c.readTimeout = 8000
+                    c.instanceFollowRedirects = false
+                    val code = c.responseCode
+                    c.disconnect()
+                    if (code == 204 || code == 200) { ms = System.currentTimeMillis() - t0; break }
+                } catch (t: Throwable) { /* blocked/DNS/dead host - try the next probe URL */ }
+            }
+            mainHandler.post {
+                if (isDestroyed || gen != connGen || lastNetOnline != true) return@post
+                applyConnColor(when {
+                    ms < 0 -> colorNone
+                    ms <= 1000 -> colorGood
+                    ms <= 5000 -> colorFair
+                    else -> colorPoor
+                })
+            }
         }
+    }
+
+    private fun applyConnColor(color: Int) {
+        if (!::sessionName.isInitialized) return
+        val d = connBorder ?: return
+        d.setStroke((2f * resources.displayMetrics.density).toInt().coerceAtLeast(2), color)
+        sessionName.background = d
     }
 
     /**
@@ -1272,16 +1319,14 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     }
 
     /**
-     * Gestures (v2.2.0-beta-3):
-     *  - download card: tap or drag DOWN -> open Downloads; drag in ANY other direction past the
-     *    threshold -> dismiss; smaller drags snap back. Auto-hides after 5 s unless held.
-     *  - network chip: drag any direction -> dismiss, otherwise the 2.5 s timer runs.
+     * Gestures (v2.2.0-beta-5: download card only - the network chip is gone, connectivity is the
+     * session-name border): tap or drag DOWN -> open Downloads; drag in ANY other direction past
+     * the threshold -> dismiss; smaller drags snap back. Auto-hides after 5 s unless held.
      */
     private fun setupPillGestures() {
         val density = resources.displayMetrics.density
         val dismissPx = 96f * density
         val downPx = 84f * density
-        val chipDismissPx = 40f * density
         var downX = 0f
         var downY = 0f
         var dragging = false
@@ -1310,35 +1355,6 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
                         dist > dismissPx -> dismissDownloadPill()                       // any other drag = remove
                         else -> downloadPill.postDelayed(hideDownloadPill, 5000)        // snap back, timer resumes
                     }
-                    true
-                }
-                else -> false
-            }
-        }
-        var chipX = 0f
-        var chipY = 0f
-        var chipDragged = false
-        networkPill.setOnTouchListener { v, ev ->
-            when (ev.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    chipX = ev.rawX; chipY = ev.rawY; chipDragged = false
-                    networkPill.removeCallbacks(hideNetworkPill)
-                    v.animate().cancel()
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = ev.rawX - chipX
-                    val dy = ev.rawY - chipY
-                    if (kotlin.math.hypot(dx.toDouble(), dy.toDouble()) > android.view.ViewConfiguration.get(this).scaledTouchSlop) chipDragged = true
-                    if (chipDragged) { v.translationX = dx; v.translationY = dy }
-                    true
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    val moved = chipDragged &&
-                        (kotlin.math.hypot((ev.rawX - chipX).toDouble(), (ev.rawY - chipY).toDouble()) > chipDismissPx)
-                    v.translationX = 0f; v.translationY = 0f
-                    if (moved) { networkPill.removeCallbacks(hideNetworkPill); hideNetworkPill.run() }
-                    else networkPill.postDelayed(hideNetworkPill, 1500)
                     true
                 }
                 else -> false

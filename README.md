@@ -136,6 +136,19 @@ Issues and pull requests are welcome.
 Releases follow a **beta train**: while only fixes land, versions increment `2.2.0-beta-1`,
 `2.2.0-beta-2`, …; the next feature wave starts a new minor.
 
+### 2.2.0-beta-5
+- **Fixed — crash when the internet was closed** (`CalledFromWrongThreadException`): the
+  connectivity callback delivered on the system's internal handler thread; it is now explicitly
+  bound to the main thread.
+- **Fixed — connectivity feedback died after the first navigation:** cleanup code had landed in
+  the wrong function and silently unregistered the callback on every URL load; it now lives in
+  `onDestroy` where it belongs.
+- **New — connection-quality border on the session name (replaces the Online/Offline popup):** a
+  thin border around the header session name shows live latency — **green** ≤ 1 s (good), **yellow**
+  ≤ 5 s, **red** > 5 s (responding but slow), **no color** when there is no usable internet
+  (data/Wi-Fi on but nothing loads). Probed on every connectivity change and refreshed every 30 s
+  while online (three `generate_204` fallback hosts).
+
 ### 2.2.0-beta-4
 - **Removed — the permanent download strip under the address bar** (the "Downloading x · 42%" line
   that sat at the top of the app). All download feedback is the floating card now.
