@@ -171,8 +171,10 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     private val colorPoor = android.graphics.Color.parseColor("#EF4444")
     private val colorNone = android.graphics.Color.TRANSPARENT
     private var connExecutor: java.util.concurrent.ExecutorService? = java.util.concurrent.Executors.newSingleThreadExecutor()
-    /** 30 s refresh while the network is up (re-posts itself only when still online). */
-    private val periodicConnProbe = Runnable {
+    /** 30 s refresh while the network is up (re-posts itself only when still online).
+     *  Explicit Runnable type: the body re-arms itself via postDelayed(periodicConnProbe),
+     *  which would otherwise be a recursive type-inference problem. */
+    private val periodicConnProbe: Runnable = Runnable {
         if (lastNetOnline == true) {
             probeConnectivity()
             mainHandler.postDelayed(periodicConnProbe, 30_000)
