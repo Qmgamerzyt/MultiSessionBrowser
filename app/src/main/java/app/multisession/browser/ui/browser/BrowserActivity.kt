@@ -1214,8 +1214,10 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         }
     }
 
-    /** 5 s timer: fade out, then immediately surface the next queued event (if any). */
-    private val hideDownloadPill = Runnable {
+    /** 5 s timer: fade out, then immediately surface the next queued event (if any).
+     *  Explicit Runnable type: the body re-arms itself via removeCallbacks(hideDownloadPill),
+     *  which would otherwise be a recursive type-inference problem. */
+    private val hideDownloadPill: Runnable = Runnable {
         if (!::downloadPill.isInitialized) return@Runnable
         pillDownloadId = null
         pillCompletedEntity = null
