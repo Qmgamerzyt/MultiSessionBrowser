@@ -152,6 +152,20 @@ class DownloadsActivity : AppCompatActivity() {
             .show()
     }
 
+    /**
+     * v2.2.0-stable: the row's dedicated delete button - ALWAYS deletes the file from storage AND
+     * removes the list entry (one confirm for a real file; entries without one go straight).
+     */
+    private fun deleteWithFile(d: DownloadEntity) {
+        if (d.status != DownloadStatus.COMPLETED || !dm.fileExists(d)) { dm.delete(d.id, deleteFile = true); return }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.dl_delete_file)
+            .setMessage(getString(R.string.dl_delete_storage_confirm, d.fileName))
+            .setPositiveButton(R.string.dl_delete_file) { _, _ -> dm.delete(d.id, deleteFile = true) }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
     private fun toast(s: String) = Snackbar.make(findViewById(R.id.recycler), s, Snackbar.LENGTH_SHORT).show()
 
     // ------------------------------------------------------------------ adapter
@@ -168,6 +182,7 @@ class DownloadsActivity : AppCompatActivity() {
             private val name: TextView = v.findViewById(R.id.dlName)
             private val info: TextView = v.findViewById(R.id.dlInfo)
             private val primary: ImageButton = v.findViewById(R.id.dlPrimary)
+            private val delete: ImageButton = v.findViewById(R.id.dlDelete)
             private val more: ImageButton = v.findViewById(R.id.dlMore)
             private val progress: ProgressBar = v.findViewById(R.id.dlProgress)
 
@@ -202,6 +217,7 @@ class DownloadsActivity : AppCompatActivity() {
                     d.status == DownloadStatus.COMPLETED -> { primary.setImageResource(R.drawable.ic_open_in_new); primary.contentDescription = getString(R.string.dl_open); primary.setOnClickListener { open(d) } }
                     else -> { primary.setImageResource(R.drawable.ic_refresh); primary.contentDescription = getString(R.string.dl_retry); primary.setOnClickListener { dm.retry(d.id) } }
                 }
+                delete.setOnClickListener { deleteWithFile(d) }
                 more.setOnClickListener { showMore(it, d) }
                 itemView.setOnClickListener { if (d.status == DownloadStatus.COMPLETED) open(d) else showMore(more, d) }
             }

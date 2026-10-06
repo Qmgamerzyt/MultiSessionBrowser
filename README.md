@@ -134,7 +134,19 @@ Issues and pull requests are welcome.
 ## Changelog
 
 Releases follow a **beta train**: while only fixes land, versions increment `2.2.0-beta-1`,
-`2.2.0-beta-2`, …; the next feature wave starts a new minor.
+`2.2.0-beta-2`, …; the next feature wave starts a new minor. As of `2.2.0-stable` the app is
+considered **stable** — new versions no longer carry a `-beta-N` suffix.
+
+### 2.2.0-stable
+- **New — delete button in Downloads:** every download row now has its own trash button that
+  removes the file from storage AND takes the entry off the list (one confirm for a real file;
+  unfinished entries go straight).
+- **New — "GitHub repository" button in the sidebar:** opens this repository in a tab — but if a
+  tab of the **current session** already has the repository open (even an archived one), it
+  switches to that tab instead of stacking a duplicate.
+- **Changed — About moved to its own page:** everything that used to sit inline under
+  Settings → About (engine & session isolation, copyright) now lives on a dedicated About screen,
+  opened by a new **About** button in Settings, and the page shows the app version too.
 
 ### 2.2.0-beta-5
 - **Fixed — crash when the internet was closed** (`CalledFromWrongThreadException`): the

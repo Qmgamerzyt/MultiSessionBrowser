@@ -60,4 +60,14 @@
             android:layout_weight="1"
             android:text="@string/incognito_session" />
     </LinearLayout>
+    <!-- v2.2.0-stable: opens this repository in a tab (reuses an already-open repo tab). -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/repoButton"
+        style="@style/Widget.Material3.Button.TextButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:layout_marginEnd="8dp"
+        android:layout_marginBottom="4dp"
+        android:text="@string/open_repo" />
 </LinearLayout>

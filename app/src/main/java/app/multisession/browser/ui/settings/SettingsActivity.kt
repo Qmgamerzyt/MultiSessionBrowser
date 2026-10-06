@@ -1,5 +1,6 @@
 package app.multisession.browser.ui.settings
 
+import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
@@ -42,8 +43,15 @@ class SettingsFragment : PreferenceFragmentCompat(), SharedPreferences.OnSharedP
 
         findPreference<EditTextPreference>(Prefs.KEY_CUSTOM_SEARCH)?.setOnBindEditTextListener { it.hint = "https://example.com/search?q=%s" }
 
-        findPreference<Preference>("about_webview")?.summary = core.isolation.describe(requireContext())
-        findPreference<Preference>("copyright")?.summary = getString(R.string.copyright)
+        // v2.2.0-stable: About moved to its own page - this button opens it (summary = version).
+        findPreference<Preference>("about")?.let { p ->
+            val info = requireContext().packageManager.getPackageInfo(requireContext().packageName, 0)
+            p.summary = "${info.versionName} (${info.longVersionCode})"
+            p.setOnPreferenceClickListener {
+                startActivity(Intent(requireContext(), AboutActivity::class.java))
+                true
+            }
+        }
 
         findPreference<Preference>("clear_session_cookies")?.setOnPreferenceClickListener { confirm(R.string.clear_cookies) { s -> core.sessions.clearData(s, cookies = true, storage = false, cache = false, history = false) }; true }
         findPreference<Preference>("clear_session_storage")?.setOnPreferenceClickListener { confirm(R.string.clear_storage) { s -> core.sessions.clearData(s, cookies = false, storage = true, cache = false, history = false) }; true }

@@ -114,10 +114,8 @@
             app:useSimpleSummaryProvider="true" />
     </PreferenceCategory>
 
-    <PreferenceCategory android:title="@string/pref_about">
-        <Preference android:key="about_webview" android:title="@string/pref_isolation_status" android:selectable="false" />
-        <Preference android:key="copyright" android:title="@string/copyright" android:selectable="false" />
-    </PreferenceCategory>
+    <!-- v2.2.0-stable: About content (isolation status, copyright, version) lives on its own page -
+         the "About" preference at the end of this screen opens it. -->
     <PreferenceCategory android:title="WebRTC">
         <SwitchPreferenceCompat
             android:key="webrtc_compat"
@@ -132,4 +130,5 @@
             android:title="Web console to logcat"
             android:summary="Routes page console messages (JS errors, CSP violations, unhandled exceptions) to logcat while browsing. Always on in debug builds; small cost on message-heavy pages." />
     </PreferenceCategory>
+    <Preference android:key="about" android:title="@string/pref_about" />
 </PreferenceScreen>

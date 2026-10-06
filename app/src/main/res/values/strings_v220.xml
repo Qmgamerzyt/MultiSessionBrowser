@@ -13,4 +13,12 @@
 
     <!-- Paused shade notification: bar + "how much done out of how much". -->
     <string name="dl_paused_size">Paused · %1$s of %2$s</string>
+
+    <!-- v2.2.0-stable -->
+    <!-- Sidebar drawer button: opens this repository in a tab. -->
+    <string name="open_repo">GitHub repository</string>
+    <!-- Confirm before the row delete button removes the file AND the list entry. -->
+    <string name="dl_delete_storage_confirm">Delete %1$s? The file will be removed from storage and from the list.</string>
+    <!-- About page row label. -->
+    <string name="about_version">Version</string>
 </resources>

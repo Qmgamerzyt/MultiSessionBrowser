@@ -69,6 +69,12 @@ class SessionsDrawer(private val activity: BrowserActivity, private val core: Br
                 .setNegativeButton(android.R.string.cancel, null)
                 .show()
         }
+        // v2.2.0-stable: sidebar Repository button - BrowserActivity.openRepository() reuses an
+        // already-open repo tab of the current session instead of stacking duplicates.
+        root.findViewById<View>(R.id.repoButton).setOnClickListener {
+            activity.openRepository()
+            activity.closeDrawers()
+        }
     }
 
     fun refresh() = adapter.submit(core.sessions.sessions.value, core.sessions.activeId)

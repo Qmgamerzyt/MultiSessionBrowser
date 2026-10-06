@@ -795,6 +795,18 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     }
 
     /**
+     * v2.2.0-stable: sidebar "Repository" button. Opens this repository in a tab - but if the
+     * CURRENT session already has a repo tab open (even archived, showTab brings it back),
+     * switch to that one instead of stacking duplicates.
+     */
+    fun openRepository() {
+        val session = core.sessions.active.value ?: run { newTab(REPO_URL); return }
+        val existing = core.tabs.allTabsFor(session.id)
+            .firstOrNull { it.url.startsWith(REPO_URL, ignoreCase = true) }
+        if (existing != null) showTab(existing) else newTab(REPO_URL)
+    }
+
+    /**
      * @param undo offer "Tab closed / Undo" afterwards (v2.1.7). Only set for closes the user asked
      *             for on purpose (card X, card menu, swipe); page-driven/internal closes stay silent.
      */
@@ -2412,5 +2424,8 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
          * share payload.
          */
         private const val SHARE_APP_URL = "https://github.com/Qmgamerzyt/MultiSessionBrowser-Release/releases"
+
+        /** v2.2.0-stable: this repository, opened by the sidebar "Repository" button. */
+        private const val REPO_URL = "https://github.com/Qmgamerzyt/MultiSessionBrowser"
     }
 }

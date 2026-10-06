@@ -43,6 +43,8 @@
                 android:textSize="12sp" />
         </LinearLayout>
         <ImageButton android:id="@+id/dlPrimary" style="@style/CompactBarButton" android:layout_width="40dp" android:layout_height="40dp" android:contentDescription="@string/more_options" android:src="@drawable/ic_pause" />
+        <!-- v2.2.0-stable: explicit delete - removes the file from storage AND the list entry. -->
+        <ImageButton android:id="@+id/dlDelete" style="@style/CompactBarButton" android:layout_width="40dp" android:layout_height="40dp" android:contentDescription="@string/dl_delete_file" android:src="@drawable/ic_delete" />
         <ImageButton android:id="@+id/dlMore" style="@style/CompactBarButton" android:layout_width="40dp" android:layout_height="40dp" android:contentDescription="@string/more_options" android:src="@drawable/ic_more_vert" />
     </LinearLayout>
     <ProgressBar
