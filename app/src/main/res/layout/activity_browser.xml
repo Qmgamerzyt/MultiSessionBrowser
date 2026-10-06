@@ -48,20 +48,6 @@
                 android:background="?attr/colorSurfaceContainer"
                 android:orientation="vertical">
 
-                <!-- v2.1.7 (issue E): live download progress inside the app (replaces the transient
-                     "Download started" snackbar). Part of the chrome: it hides with the toolbar. -->
-                <TextView
-                    android:id="@+id/downloadBanner"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:background="@color/banner_bg"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:padding="10dp"
-                    android:textColor="@color/banner_text"
-                    android:textSize="12sp"
-                    android:visibility="gone" />
-
                 <LinearLayout
                     android:id="@+id/controlsRow"
                     android:layout_width="match_parent"
@@ -242,10 +228,12 @@
             </FrameLayout>
         </LinearLayout>
 
-        <!-- v2.2.0-beta-3: transient bottom overlays (children of the Coordinator, so they float
-             above the chrome). networkPill = connectivity chip (~2.5 s, drag to dismiss).
-             downloadPill = 5-second download card: tap or drag DOWN opens Downloads, any other
-             drag dismisses - see BrowserActivity.showNetworkPill / showDownloadPill. -->
+        <!-- v2.2.0-beta-4: transient overlays (children of the Coordinator, so they float above
+             the chrome). downloadPill = 5-second download card at the TOP: tap or drag DOWN opens
+             Downloads, any other drag dismisses, completed cards expose an Open button; a queued
+             chain shows simultaneous start/result events one after another.
+             networkPill = connectivity chip at the BOTTOM (~2.5 s, drag to dismiss) - see
+             BrowserActivity.showNetworkPill / showDownloadPill. -->
         <TextView
             android:id="@+id/networkPill"
             android:layout_width="wrap_content"
@@ -267,10 +255,10 @@
             android:id="@+id/downloadPill"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_gravity="bottom"
+            android:layout_gravity="top"
             android:layout_marginStart="16dp"
+            android:layout_marginTop="96dp"
             android:layout_marginEnd="16dp"
-            android:layout_marginBottom="52dp"
             android:background="@drawable/bg_pill_card"
             android:elevation="10dp"
             android:gravity="center_vertical"
@@ -319,6 +307,25 @@
                     android:progressBackgroundTint="#4DFFFFFF"
                     android:visibility="gone" />
             </LinearLayout>
+            <!-- v2.2.0-beta-4: direct open for a completed file (shown on the result card only). -->
+            <TextView
+                android:id="@+id/downloadPillOpen"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_pill"
+                android:clickable="true"
+                android:focusable="true"
+                android:paddingStart="14dp"
+                android:paddingTop="7dp"
+                android:paddingEnd="14dp"
+                android:paddingBottom="7dp"
+                android:text="@string/dl_open"
+                android:textAllCaps="false"
+                android:textColor="@android:color/white"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
         </LinearLayout>
     </androidx.coordinatorlayout.widget.CoordinatorLayout>
 

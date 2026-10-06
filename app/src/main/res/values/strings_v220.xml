@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- v2.2.0-beta-3: address-bar Execute suggestion, transient bottom pills (network + downloads). -->
+<!-- v2.2.0-beta-3: address-bar Execute suggestion, transient pills (network bottom + downloads top).
+     v2.2.0-beta-4: concurrent-download count, paused notification "X of Y". -->
 <resources>
     <string name="suggestion_execute">Execute: %1$s</string>
 
@@ -7,6 +8,11 @@
     <string name="net_offline">Offline</string>
 
     <string name="pill_started">Downloading…</string>
-    <string name="pill_done">Completed · tap to open downloads</string>
-    <string name="pill_failed">Failed · tap to open downloads</string>
+    <string name="pill_done">Downloaded</string>
+    <string name="pill_failed">Download failed</string>
+    <!-- Shown on the card only when several transfers run at once: "3 downloading". -->
+    <string name="pill_active_count">%1$d downloading</string>
+
+    <!-- Paused shade notification: bar + "how much done out of how much". -->
+    <string name="dl_paused_size">Paused · %1$s of %2$s</string>
 </resources>

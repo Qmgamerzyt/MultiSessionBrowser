@@ -20,13 +20,12 @@ import app.multisession.browser.ui.downloads.DownloadsActivity
 /**
  * Android download notifications.
  *
- * v2.2.0-beta-3 (user-requested change): the PERMANENT ongoing progress notification is gone.
- * While the app is in the foreground the in-app 5-second download card reports start / progress /
- * result; the system shade now only carries the dismissible states:
+ * v2.2.0-beta-4 (user-requested): the system shade never carries a progress bar without numbers:
  *
- *  - running/pending -> nothing posted (any lingering ongoing notification from older builds is
- *    cancelled once per download),
- *  - paused           -> non-ongoing notification with Resume + Cancel actions,
+ *  - running/pending -> NOTHING posted, and any lingering ongoing notification (older build or a
+ *    race) is cleared on EVERY publish - it can never sit in the shade forever,
+ *  - paused           -> non-ongoing notification WITH the determinate bar and "Paused · X of Y"
+ *    so the shade always says how much is done out of how much, + Resume/Cancel actions,
  *  - completed/failed -> auto-cancelling result notification with Open + Close actions,
  *  - cancelled        -> the notification is removed.
  *
@@ -68,17 +67,25 @@ object DownloadNotifier {
         } else if (DownloadStatus.isFinished(d.status)) {
             lastSent.remove(d.id)
         }
-        if (!canPost(app)) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ensureChannels(app)
         val manager = NotificationManagerCompat.from(app)
         val id = d.id.hashCode()
         when (d.status) {
-            // v2.2.0-beta-3: NO permanent progress notification any more - foreground feedback is
-            // the in-app 5-second download card (BrowserActivity.showDownloadPill), announced on
-            // start/result only, never per tick. Cancel-once clears a lingering ongoing
-            // notification posted by older builds so it cannot sit in the shade forever.
-            DownloadStatus.PENDING, DownloadStatus.RUNNING ->
-                if (lastSent.put(d.id, percent to System.currentTimeMillis()) == null) manager.cancel(id)
+            // v2.2.0-beta-4: NO progress notification - foreground feedback is the top download
+            // card - and ALWAYS clear: a lingering ongoing bar from an older build (or a race) is
+            // killed on every publish, not just the first one (the old cancel-once ALSO died at
+            // the permission check below, so a denied POST_NOTIFICATIONS kept the bar forever).
+            // The throttle above caps this at ~1 IPC/s. cancel() needs no permission, so this
+            // runs BEFORE canPost.
+            DownloadStatus.PENDING, DownloadStatus.RUNNING -> {
+                lastSent.put(d.id, percent to System.currentTimeMillis())
+                manager.cancel(id)
+                return
+            }
+            else -> {}
+        }
+        if (!canPost(app)) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ensureChannels(app)
+        when (d.status) {
             DownloadStatus.PAUSED ->
                 manager.notify(id, active(app, d, ongoing = false))
             DownloadStatus.COMPLETED -> {
@@ -116,8 +123,20 @@ object DownloadNotifier {
             b.setProgress(0, 0, true)   // unknown length: indeterminate, never a fake 0%
         }
         if (paused) {
-            b.setContentText(context.getString(R.string.dl_status_paused))
-            b.setProgress(0, 0, false)
+            // v2.2.0-beta-4: paused KEEPS the determinate bar (set above when the size is known)
+            // and states the numbers - "how much done out of" must be readable in the shade.
+            if (d.totalBytes > 0) {
+                b.setContentText(
+                    context.getString(
+                        R.string.dl_paused_size,
+                        formatBytes(context, d.downloadedBytes),
+                        formatBytes(context, d.totalBytes),
+                    )
+                )
+            } else {
+                b.setContentText(context.getString(R.string.dl_status_paused))
+                b.setProgress(0, 0, false)   // unknown length: no spinning bar behind "Paused"
+            }
             b.addAction(R.drawable.ic_play, context.getString(R.string.dl_resume), action(context, ACTION_RESUME, d.id))
         } else if (d.status == DownloadStatus.RUNNING) {
             // v2.1.10 (A9): pause without losing the transfer. Pending has no Pause - nothing is

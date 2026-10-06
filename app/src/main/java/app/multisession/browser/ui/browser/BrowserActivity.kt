@@ -148,18 +148,27 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     private lateinit var appMenu: AppMenu
     private lateinit var fullscreenExit: FullscreenExitButton
     private lateinit var homeButton: ImageButton
-    private lateinit var downloadBanner: TextView
-    // v2.2.0-beta-3: transient bottom pills (connectivity chip + 5-second download card).
+    // v2.2.0-beta-4: transient pills (connectivity chip at the bottom, download card at the top).
     private lateinit var networkPill: TextView
     private lateinit var downloadPill: View
     private lateinit var downloadPillIcon: ImageView
     private lateinit var downloadPillTitle: TextView
     private lateinit var downloadPillSub: TextView
     private lateinit var downloadPillProgress: ProgressBar
-    private var networkAvailable = true
+    private lateinit var downloadPillOpen: TextView
+    /** Last connectivity state ANNOUNCED to the chip: null = nothing shown yet (cold start stays silent). */
+    private var lastNetOnline: Boolean? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private val downloadStates = HashMap<String, Int>()
     private var pillDownloadId: String? = null
+    /** (entity, started) events waiting for the card: one per download, latest state wins. */
+    private val pillQueue = java.util.ArrayDeque<Pair<DownloadEntity, Boolean>>()
+    /** Latest download list - a queued event shows FRESH progress, not the snapshot it was queued with. */
+    private var lastDownloadList: List<DownloadEntity> = emptyList()
+    /** How many transfers are active right now (shown on the card when > 1). */
+    private var pillActiveCount = 0
+    /** Set while a COMPLETED result card is up - powers the Open button. */
+    private var pillCompletedEntity: DownloadEntity? = null
 
     /** Created lazily and attached to [webContainer] only together with an OPEN session (see attachSession). */
     private var geckoView: GeckoView? = null
@@ -382,19 +391,17 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         reloadStopButton = findViewById(R.id.reloadStopButton)
         progressBar = findViewById(R.id.progressBar)
         webContainer = findViewById(R.id.webContainer)
-        downloadBanner = findViewById(R.id.downloadBanner)
-        downloadBanner.setOnClickListener { openUrlLauncher.launch(Intent(this, DownloadsActivity::class.java)) }
         networkPill = findViewById(R.id.networkPill)
         downloadPill = findViewById(R.id.downloadPill)
         downloadPillIcon = findViewById(R.id.downloadPillIcon)
         downloadPillTitle = findViewById(R.id.downloadPillTitle)
         downloadPillSub = findViewById(R.id.downloadPillSub)
         downloadPillProgress = findViewById(R.id.downloadPillProgress)
+        downloadPillOpen = findViewById(R.id.downloadPillOpen)
+        downloadPillOpen.setOnClickListener { openDownloadedFile() }
         setupPillGestures()
         registerNetworkPill()
-        // v2.1.7 (E): the banner follows the download StateFlow (progress is published every ~300 ms,
-        // renderDownloadBanner() ignores identical updates).
-        lifecycleScope.launch { core.downloads.downloads.collect { renderDownloadBanner(it); onDownloadListChanged(it) } }
+        lifecycleScope.launch { core.downloads.downloads.collect { onDownloadListChanged(it) } }
         // v2.1.7 (N): while the active session is Incognito, Android keeps one low-priority
         // notification that explains it and can close the session (deleting its profile data).
         lifecycleScope.launch { core.sessions.active.collect { IncognitoNotifier.update(this@BrowserActivity, it) } }
@@ -1004,27 +1011,7 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         isolationBanner.isVisible = !core.isolation.isIsolated && !inFullScreen && !toolbarHidden
     }
 
-    /** v2.1.7 (issue E): live "Downloading x - 42% (+1 more)" banner; gone as soon as nothing runs. */
-    private fun renderDownloadBanner(list: List<DownloadEntity>) {
-        val active = list.filter { DownloadStatus.isActive(it.status) }
-        if (active.isEmpty()) {
-            if (downloadBanner.isVisible) downloadBanner.isVisible = false
-            return
-        }
-        val primary = active.maxByOrNull { it.updatedAt } ?: return
-        val percent = if (primary.totalBytes > 0) {
-            ((primary.downloadedBytes * 100) / primary.totalBytes).toInt().coerceIn(0, 100)
-        } else -1
-        val text = buildString {
-            append(getString(R.string.dl_banner, primary.fileName))
-            if (percent >= 0) append(" \u00b7 ").append(percent).append('%')
-            if (active.size > 1) append(" \u00b7 ").append(getString(R.string.dl_banner_more, active.size - 1))
-        }
-        if (downloadBanner.text != text) downloadBanner.text = text
-        if (!downloadBanner.isVisible) downloadBanner.isVisible = true
-    }
-
-    // ================================================================== transient bottom pills (v2.2.0-beta-3)
+    // ================================================================== transient pills (v2.2.0-beta-4)
 
     private fun fmtBytes(bytes: Long): String = android.text.format.Formatter.formatFileSize(this, bytes)
 
@@ -1050,22 +1037,26 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         }
     }
 
-    /** Registers the default-network callback; only CHANGES after registration are announced, so a
-     *  cold start never spams "Online". */
+    /** Registers the default-network callback; every CHANGE is announced IMMEDIATELY (v2.2.0-beta-4:
+     *  the old700 ms-debounced recheck was cancelled by a fast onAvailable before it ever showed
+     *  "Offline", so quick toggles displayed nothing at all). The delayed recheck now only recovers
+     *  a Wi-Fi -> data handover (Offline flashed -> back Online). Cold start stays silent. */
     private fun registerNetworkPill() {
         val cm = getSystemService(ConnectivityManager::class.java)
-        networkAvailable = cm.activeNetwork != null
+        lastNetOnline = cm.activeNetwork != null
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 networkPill.removeCallbacks(networkRecheck)
-                if (!networkAvailable) {
-                    networkAvailable = true
+                if (lastNetOnline != true) {
+                    lastNetOnline = true
                     showNetworkPill(getString(R.string.net_online))
                 }
             }
             override fun onLost(network: Network) {
-                // A Wi-Fi -> data handover fires onLost before the replacement is up: re-check after
-                // a short grace period instead of flashing a false "Offline".
+                if (lastNetOnline != false) {
+                    lastNetOnline = false
+                    showNetworkPill(getString(R.string.net_offline))
+                }
                 networkPill.removeCallbacks(networkRecheck)
                 networkPill.postDelayed(networkRecheck, 700)
             }
@@ -1077,30 +1068,63 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
     private val networkRecheck = Runnable {
         if (networkCallback == null) return@Runnable
         val online = getSystemService(ConnectivityManager::class.java).activeNetwork != null
-        if (networkAvailable && !online) showNetworkPill(getString(R.string.net_offline))
-        else if (!networkAvailable && online) showNetworkPill(getString(R.string.net_online))
-        networkAvailable = online
+        if (online && lastNetOnline == false) {
+            lastNetOnline = true
+            showNetworkPill(getString(R.string.net_online))
+        }
     }
 
-    /** Drives the 5-second download card from the downloads StateFlow: announces a FRESHLY started
-     *  download and any completion/failure; progress ticks refresh a visible card in place. */
+    /**
+     * Drives the 5-second top download card from the downloads StateFlow (v2.2.0-beta-4):
+     *  - a freshly started download enqueues a start card (createdAt guard = no rotation replay),
+     *  - a download that finishes SO fast its first emission is already finished still announces
+     *    (StateFlow conflation used to swallow that entirely),
+     *  - simultaneous start/result events queue up (one entry per id, latest state wins) and play
+     *    one after another; the visible card for the SAME id morphs in place instead of queueing.
+     */
     private fun onDownloadListChanged(list: List<DownloadEntity>) {
         val now = System.currentTimeMillis()
+        lastDownloadList = list
+        pillActiveCount = list.count { DownloadStatus.isActive(it.status) }
         for (d in list) {
             val prev = downloadStates[d.id]
             when {
-                // First sight: only a freshly created transfer (the createdAt guard keeps rotation
-                // or process restore from re-announcing downloads that started long ago).
                 prev == null && DownloadStatus.isActive(d.status) && now - d.createdAt < 6000 ->
-                    showDownloadPill(d, started = true)
+                    enqueuePill(d, started = true)
+                // fast download: first sight is already the result (cancellations stay silent)
+                prev == null && DownloadStatus.isFinished(d.status) && d.status != DownloadStatus.CANCELLED && now - d.updatedAt < 6000 ->
+                    enqueuePill(d, started = false)
                 prev == null -> {}
                 prev != d.status && (d.status == DownloadStatus.COMPLETED || d.status == DownloadStatus.FAILED) ->
-                    showDownloadPill(d, started = false)
+                    enqueuePill(d, started = false)
                 pillDownloadId == d.id -> updateDownloadPill(d)
             }
             downloadStates[d.id] = d.status
         }
+        drainPillQueue()
     }
+
+    /** One pending event per download: a queued start upgrades to the result, never duplicates. */
+    private fun enqueuePill(d: DownloadEntity, started: Boolean) {
+        if (!started && downloadPill.isVisible && pillDownloadId == d.id) {
+            morphDownloadPill(d)   // finishing inside its own card: no restart, no queue entry
+            return
+        }
+        val it = pillQueue.iterator()
+        while (it.hasNext()) if (it.next().first.id == d.id) it.remove()
+        pillQueue.addLast(d to started)
+    }
+
+    /** Shows the next queued event when the card is free (called after every list emission and on hide). */
+    private fun drainPillQueue() {
+        if (downloadPill.isVisible || pillQueue.isEmpty()) return
+        val (d, started) = pillQueue.pollFirst()
+        val fresh = lastDownloadList.firstOrNull { it.id == d.id } ?: d
+        showDownloadPill(fresh, started)
+    }
+
+    private fun countSuffix(): String =
+        if (pillActiveCount > 1) " \u00b7 " + getString(R.string.pill_active_count, pillActiveCount) else ""
 
     private fun showDownloadPill(d: DownloadEntity, started: Boolean) {
         downloadPill.removeCallbacks(hideDownloadPill)
@@ -1110,9 +1134,11 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
             if (started) R.drawable.ic_download
             else if (d.status == DownloadStatus.COMPLETED) R.drawable.ic_check else R.drawable.ic_error
         )
+        pillCompletedEntity = if (!started && d.status == DownloadStatus.COMPLETED) d else null
+        downloadPillOpen.isVisible = pillCompletedEntity != null
         when {
             started -> {
-                downloadPillSub.text = getString(R.string.pill_started)
+                downloadPillSub.text = getString(R.string.pill_started) + countSuffix()
                 downloadPillProgress.isVisible = true
                 if (d.totalBytes > 0) {
                     downloadPillProgress.isIndeterminate = false
@@ -1131,9 +1157,41 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
         downloadPill.isVisible = true
         downloadPill.animate().cancel()
         downloadPill.alpha = 0f
-        downloadPill.translationY = 48f
+        downloadPill.translationY = -48f   // drops in from the TOP
         downloadPill.animate().alpha(1f).translationY(0f).setDuration(220).start()
         downloadPill.postDelayed(hideDownloadPill, 5000)   // exactly 5 seconds, never permanent
+    }
+
+    /**
+     * Same-id result while its card is already up (a small file finishing inside its start card):
+     * the card STAYS where it is - it just becomes the "Downloaded / Open" result and gets a
+     * fresh 5 s so the Open button is tappable. No flash, no queue entry.
+     */
+    private fun morphDownloadPill(d: DownloadEntity) {
+        downloadPill.removeCallbacks(hideDownloadPill)
+        pillDownloadId = d.id
+        downloadPillTitle.text = d.fileName
+        pillCompletedEntity = if (d.status == DownloadStatus.COMPLETED) d else null
+        downloadPillOpen.isVisible = pillCompletedEntity != null
+        when (d.status) {
+            DownloadStatus.COMPLETED -> {
+                downloadPillIcon.setImageResource(R.drawable.ic_check)
+                downloadPillSub.text = getString(R.string.pill_done)
+                downloadPillProgress.isVisible = false
+                downloadPill.postDelayed(hideDownloadPill, 5000)
+            }
+            DownloadStatus.FAILED -> {
+                downloadPillIcon.setImageResource(R.drawable.ic_error)
+                downloadPillSub.text = getString(R.string.pill_failed)
+                downloadPillProgress.isVisible = false
+                downloadPill.postDelayed(hideDownloadPill, 5000)
+            }
+            DownloadStatus.CANCELLED -> {
+                dismissDownloadPill(clearQueue = false)
+                drainPillQueue()
+            }
+            else -> updateDownloadPill(d)
+        }
     }
 
     /** Live progress for the visible card (no timer restart - the card lives exactly 5 s). */
@@ -1144,29 +1202,71 @@ class BrowserActivity : AppCompatActivity(), BrowserHost, ExtensionHost, TabMana
                 if (d.totalBytes > 0) {
                     downloadPillProgress.isIndeterminate = false
                     downloadPillProgress.progress = ((d.downloadedBytes * 100) / d.totalBytes).toInt().coerceIn(0, 100)
-                    downloadPillSub.text = getString(R.string.dl_size_fmt, fmtBytes(d.downloadedBytes), fmtBytes(d.totalBytes))
-                } else downloadPillProgress.isIndeterminate = true
+                    downloadPillSub.text = getString(R.string.dl_size_fmt, fmtBytes(d.downloadedBytes), fmtBytes(d.totalBytes)) + countSuffix()
+                } else {
+                    downloadPillProgress.isIndeterminate = true
+                    downloadPillSub.text = getString(R.string.pill_started) + countSuffix()
+                }
             }
+            DownloadStatus.PENDING -> downloadPillSub.text = getString(R.string.pill_started) + countSuffix()
             DownloadStatus.PAUSED -> downloadPillSub.text = getString(R.string.dl_status_paused)
-            else -> showDownloadPill(d, started = false)
+            else -> morphDownloadPill(d)
         }
     }
 
-    private val hideDownloadPill = Runnable { dismissDownloadPill() }
-
-    private fun dismissDownloadPill() {
-        if (!::downloadPill.isInitialized || !downloadPill.isVisible) return
-        downloadPill.removeCallbacks(hideDownloadPill)
+    /** 5 s timer: fade out, then immediately surface the next queued event (if any). */
+    private val hideDownloadPill = Runnable {
+        if (!::downloadPill.isInitialized) return@Runnable
         pillDownloadId = null
+        pillCompletedEntity = null
+        downloadPill.removeCallbacks(hideDownloadPill)
         downloadPill.animate().cancel()
-        downloadPill.animate().alpha(0f).translationY(48f)
-            .withEndAction { downloadPill.isVisible = false; downloadPill.alpha = 1f; downloadPill.translationY = 0f }
+        downloadPill.animate().alpha(0f).translationY(-48f)
+            .withEndAction {
+                downloadPill.isVisible = false
+                downloadPill.alpha = 1f
+                downloadPill.translationY = 0f
+                drainPillQueue()
+            }
+            .setDuration(180).start()
+    }
+
+    /**
+     * [clearQueue] = true for user-driven dismissals (they opted out of the whole chain);
+     * the auto-timeout path keeps the queue so simultaneous events still get shown.
+     */
+    private fun dismissDownloadPill(clearQueue: Boolean = true) {
+        if (!::downloadPill.isInitialized || !downloadPill.isVisible) return
+        if (clearQueue) pillQueue.clear()
+        pillDownloadId = null
+        pillCompletedEntity = null
+        downloadPill.removeCallbacks(hideDownloadPill)
+        downloadPill.animate().cancel()
+        downloadPill.animate().alpha(0f).translationY(-48f)
+            .withEndAction {
+                downloadPill.isVisible = false; downloadPill.alpha = 1f; downloadPill.translationY = 0f
+                drainPillQueue()   // no-op after a user dismissal (queue cleared), resumes otherwise
+            }
             .setDuration(180).start()
     }
 
     private fun openDownloadsFromPill() {
         dismissDownloadPill()
         openUrlLauncher.launch(Intent(this, DownloadsActivity::class.java))
+    }
+
+    /** Open button on the completed card: launches the file; a vanished file just toasts. */
+    private fun openDownloadedFile() {
+        val d = pillCompletedEntity ?: return
+        val intent = core.downloads.openIntent(d)
+        dismissDownloadPill()
+        if (intent != null) {
+            try { startActivity(intent) } catch (t: Throwable) {
+                android.widget.Toast.makeText(this, R.string.dl_file_missing, android.widget.Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            android.widget.Toast.makeText(this, R.string.dl_file_missing, android.widget.Toast.LENGTH_SHORT).show()
+        }
     }
 
     /**

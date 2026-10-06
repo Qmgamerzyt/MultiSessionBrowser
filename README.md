@@ -136,6 +136,22 @@ Issues and pull requests are welcome.
 Releases follow a **beta train**: while only fixes land, versions increment `2.2.0-beta-1`,
 `2.2.0-beta-2`, …; the next feature wave starts a new minor.
 
+### 2.2.0-beta-4
+- **Removed — the permanent download strip under the address bar** (the "Downloading x · 42%" line
+  that sat at the top of the app). All download feedback is the floating card now.
+- **Changed — the floating download card appears at the TOP of the screen** (it used to slide up
+  from the bottom): exactly 5 seconds, tap or drag down opens Downloads, any other drag dismisses.
+- **Fixed — the Online/Offline chip showed nothing:** toggling the connection quickly cancelled the
+  delayed check before it ever displayed; Offline/Online is now announced immediately on every
+  change (the short grace period only smooths Wi-Fi → data handovers).
+- **Fixed — small downloads that finished within their 5-second card** now morph in place to
+  "Downloaded" with an **Open** button (a very fast download used to show no card at all).
+- **New — concurrent downloads:** the card shows "N downloading" while several transfers run, and
+  simultaneous start/result events queue up so each one still gets its 5 seconds.
+- **Fixed — shade notifications:** no progress bar without numbers anymore — a paused download
+  keeps the bar and says "Paused · X of Y"; any lingering ongoing progress bar is cleared on every
+  update (it used to survive when notification permission was denied).
+
 ### 2.2.0-beta-3
 - **Fixed — downloads could not be cancelled on a weak network and removed entries came back:**
   pause/cancel/delete now interrupt the transfer immediately instead of waiting for the stalled
