@@ -137,6 +137,15 @@ Releases follow a **beta train**: while only fixes land, versions increment `2.2
 `2.2.0-beta-2`, …; the next feature wave starts a new minor. As of `2.2.0-stable` the app is
 considered **stable** — new versions no longer carry a `-beta-N` suffix.
 
+### 2.2.1-beta-1
+- **Fixed — header overlapping the status bar / notch on Android 15+:** devices running Android 15
+  (API 35) enforce edge-to-edge for apps targeting SDK 35, so the system stopped reserving the
+  status-bar strip and ignored the theme's bar colours — the app never applies window insets, which
+  is why the session chip / toolbar rendered *under* the clock and cutout on those phones while
+  Android 9–14 looked fine. The app theme now opts out of edge-to-edge enforcement
+  (`windowOptOutEdgeToEdgeEnforcement`), restoring the fitted layout on every screen; older devices
+  ignore the attribute and are unchanged.
+
 ### 2.2.0-stable
 - **New — delete button in Downloads:** every download row now has its own trash button that
   removes the file from storage AND takes the entry off the list (one confirm for a real file;

@@ -7,6 +7,13 @@
         <item name="colorOnPrimaryContainer">@color/brand_on_primary_container_dark</item>
         <item name="android:statusBarColor">?attr/colorSurface</item>
         <item name="android:navigationBarColor">?attr/colorSurface</item>
+        <!-- Android 15 (API 35) enforces edge-to-edge for targetSdk 35 and ignores the
+             statusBarColor/navigationBarColor items above, laying the window out BEHIND the
+             status bar/cutout - the app never applies WindowInsets, so the header rendered
+             under the clock on those devices. Opting out restores the pre-15 fitted layout
+             (the attribute is ignored on older devices). Remove this item if edge-to-edge
+             with real inset padding is ever implemented instead. -->
+        <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
         <item name="preferenceTheme">@style/PreferenceThemeOverlay</item>
